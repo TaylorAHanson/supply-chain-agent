@@ -175,10 +175,23 @@ class SupplyChainPyFuncAgent(mlflow.pyfunc.PythonModel):
 
 ## 6. Deployment workflow
 
-1. **Provision Infrastructure** — Run `python scripts/setup_uc.py` to create schemas, tables, and UC functions.
-2. **Seed Data** — Run `python scripts/seed_data.py` to populate tables with realistic randomized data.
-3. **Log & Deploy Agent** — Run `python scripts/deploy_agent.py` to package the PyFunc model, log to MLflow, and deploy to Databricks Model Serving.
-4. **Start Application** — Run `./start.sh` to launch the FastAPI backend and React frontend.
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/taylor-hanson_data/supply-chain-agent.git
+   cd supply-chain-agent
+   ```
+2. **Install Dependencies**:
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   cd frontend && npm install && cd ..
+   ```
+3. **Configure Environment**: Set up your Databricks profile locally using the Databricks CLI (`databricks configure`). Ensure your profile is named `myenv` or update `.env`.
+4. **Provision Infrastructure**: Run `python scripts/setup_uc.py` to create schemas, tables, and UC functions.
+5. **Seed Data**: Run `python scripts/seed_data.py` to populate tables with realistic randomized data.
+6. **Log & Deploy Agent**: Run `python scripts/deploy_agent.py` to package the PyFunc model, log to MLflow, and deploy to Databricks Model Serving.
+7. **Start Application**: Run `LOCAL_MODE=true ./start.sh` to launch the FastAPI backend and React frontend locally.
 
 ---
 
