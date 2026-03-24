@@ -175,23 +175,35 @@ class SupplyChainPyFuncAgent(mlflow.pyfunc.PythonModel):
 
 ## 6. Deployment workflow
 
+The project includes a generic deployment script (`deploy.sh`) that builds the environment and deploys the agent to Databricks Model Serving. It assumes you are deploying against an existing Unity Catalog and schema.
+
 1. **Clone the repository**:
    ```bash
    git clone https://github.com/taylor-hanson_data/supply-chain-agent.git
    cd supply-chain-agent
    ```
-2. **Install Dependencies**:
+2. **Configure Environment**: 
+   Ensure your Databricks CLI is configured (`databricks configure`). By default, the deploy script uses a profile named `myenv`. 
+3. **Deploy the Agent**:
+   Run the deployment script, overriding the defaults to point to your real Unity Catalog environment:
    ```bash
-   python -m venv .venv
-   source .venv/bin/activate
-   pip install -r requirements.txt
-   cd frontend && npm install && cd ..
+   CATALOG_SCHEMA="my_production_catalog.my_schema" \
+   AGENT_ENDPOINT_NAME="my_agent_endpoint" \
+   DATABRICKS_PROFILE="default" \
+   ./deploy.sh
    ```
-3. **Configure Environment**: Set up your Databricks profile locally using the Databricks CLI (`databricks configure`). Ensure your profile is named `myenv` or update `.env`.
-4. **Provision Infrastructure**: Run `python scripts/setup_uc.py` to create schemas, tables, and UC functions.
-5. **Seed Data**: Run `python scripts/seed_data.py` to populate tables with realistic randomized data.
-6. **Log & Deploy Agent**: Run `python scripts/deploy_agent.py` to package the PyFunc model, log to MLflow, and deploy to Databricks Model Serving.
-7. **Start Application**: Run `LOCAL_MODE=true ./start.sh` to launch the FastAPI backend and React frontend locally.
+4. **Start Application**: 
+   Run `./start.sh` to launch the FastAPI backend and React frontend locally. (Note: Use `LOCAL_MODE=true ./start.sh` if you want to bypass the hosted endpoint and run the agent logic locally for faster development).
+
+### Optional: Sandbox Data Setup
+If you are deploying this in a fresh environment and want to generate mock tables and data for testing instead of using real data, you can run the setup scripts *before* deploying:
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python scripts/setup_uc.py
+python scripts/seed_data.py
+```
 
 ---
 
