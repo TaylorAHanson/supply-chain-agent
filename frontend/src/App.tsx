@@ -92,10 +92,38 @@ function App() {
       }
 
       const data = await response.json()
-      setMessages(prev => [...prev, { 
-        role: 'assistant', 
-        content: `File ${data.filename} uploaded successfully to ${data.volume_path}. You can now ask me to analyze it or update the safety stock table.` 
-      }])
+      
+      // Notify the agent generically that a file was uploaded so it can respond
+      try {
+        const autoResponse = await fetch('http://localhost:8000/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            session_id: sessionId,
+            query: `[System Event] I have successfully uploaded a file named "${data.filename}" to the volume path "${data.volume_path}". Please acknowledge this upload and ask me what I would like to do with it.`,
+          }),
+        })
+        
+        if (autoResponse.ok) {
+          const autoData = await autoResponse.json()
+          setMessages(prev => [...prev, { 
+            role: 'assistant', 
+            content: autoData.message,
+            tool_calls: autoData.tool_calls 
+          }])
+        } else {
+          throw new Error("Agent failed to respond to upload notification")
+        }
+      } catch (autoErr) {
+        console.error('Error communicating upload to agent:', autoErr)
+        setMessages(prev => [...prev, { 
+          role: 'assistant', 
+          content: `File ${data.filename} uploaded successfully to ${data.volume_path}, but I encountered an error responding.` 
+        }])
+      }
+      
     } catch (error) {
       console.error('Error:', error)
       setMessages(prev => [...prev, { 
@@ -125,45 +153,45 @@ function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
-      <header className="bg-white shadow-sm px-6 py-4 flex justify-between items-center">
+    <div className="flex flex-col h-screen bg-gray-50 text-sm">
+      <header className="bg-white shadow-sm px-4 py-2 flex justify-between items-center">
         <div>
-          <h1 className="text-xl font-semibold text-gray-800">Supply Chain Agent</h1>
-          <p className="text-sm text-gray-500">Databricks Agent Framework + FastMCP</p>
+          <h1 className="text-base font-semibold text-gray-800">Supply Chain Agent</h1>
+          <p className="text-xs text-gray-500">Databricks Agent Framework + FastMCP</p>
         </div>
         <button
           onClick={handleClearChat}
-          className="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1 rounded border border-gray-300 transition-colors"
+          className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded border border-gray-300 transition-colors"
         >
-          Clear Chat
+          Clear
         </button>
       </header>
 
-      <main className="flex-1 overflow-y-auto p-6">
-        <div className="max-w-3xl mx-auto space-y-6">
+      <main className="flex-1 overflow-y-auto p-3">
+        <div className="w-full mx-auto space-y-3">
           {messages.map((msg, idx) => (
             <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[80%] rounded-lg p-4 ${
+              <div className={`max-w-[90%] rounded-lg p-3 ${
                 msg.role === 'user' 
                   ? 'bg-blue-600 text-white' 
                   : 'bg-white border border-gray-200 text-gray-800'
               }`}>
                 {msg.role === 'user' ? (
-                  <p className="whitespace-pre-wrap">{msg.content}</p>
+                  <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
                 ) : (
                   <div 
-                    className="agent-message-content" 
+                    className="agent-message-content leading-relaxed" 
                     dangerouslySetInnerHTML={{ __html: msg.content }} 
                   />
                 )}
                 
                 {msg.tool_calls && msg.tool_calls.length > 0 && (
-                  <div className="mt-3 pt-3 border-t border-gray-100">
-                    <p className="text-xs font-semibold text-gray-500 mb-2">TOOLS USED</p>
-                    <div className="flex flex-wrap gap-2">
+                  <div className="mt-2 pt-2 border-t border-gray-100">
+                    <p className="text-[10px] font-semibold text-gray-400 mb-1">TOOLS USED</p>
+                    <div className="flex flex-wrap gap-1">
                       {msg.tool_calls.map((tc, tIdx) => (
-                        <span key={tIdx} className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-gray-100 text-gray-600">
-                          <svg className="w-3 h-3 mr-1 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                        <span key={tIdx} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-500">
+                          <svg className="w-2.5 h-2.5 mr-1 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
                           {tc.tool_name}
                         </span>
                       ))}
@@ -176,10 +204,10 @@ function App() {
           
           {isLoading && (
             <div className="flex justify-start">
-              <div className="bg-white border border-gray-200 rounded-lg p-4 flex items-center space-x-2">
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
+              <div className="bg-white border border-gray-200 rounded-lg p-3 flex items-center space-x-1.5">
+                <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></div>
+                <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
               </div>
             </div>
           )}
@@ -187,11 +215,11 @@ function App() {
         </div>
       </main>
 
-      <footer className="bg-white border-t border-gray-200 p-4">
-        <div className="max-w-3xl mx-auto">
-          <form onSubmit={handleSubmit} className="flex space-x-4 items-center">
-            <label className="cursor-pointer bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-md font-medium transition-colors border border-gray-300">
-              Upload File
+      <footer className="bg-white border-t border-gray-200 p-3">
+        <div className="w-full mx-auto">
+          <form onSubmit={handleSubmit} className="flex space-x-2 items-center">
+            <label className="cursor-pointer bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded text-xs font-medium transition-colors border border-gray-300 flex-shrink-0">
+              Upload
               <input 
                 type="file" 
                 className="hidden" 
@@ -204,14 +232,14 @@ function App() {
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask about inventory, POs, or lead times..."
-              className="flex-1 rounded-md border border-gray-300 px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-800"
+              placeholder="Ask anything..."
+              className="flex-1 rounded border border-gray-300 px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent text-gray-800"
               disabled={isLoading}
             />
             <button
               type="submit"
               disabled={isLoading || !input.trim()}
-              className="bg-blue-600 text-white px-6 py-2 rounded-md font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="bg-blue-600 text-white px-4 py-1.5 rounded text-xs font-medium hover:bg-blue-700 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
             >
               Send
             </button>

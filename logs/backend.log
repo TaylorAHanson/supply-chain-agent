@@ -1,218 +1,76 @@
 INFO:     Will watch for changes in these directories: ['/Users/taylor.hanson/Documents/supply-chain-agent']
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     Started reloader process [35915] using StatReload
-INFO:     Started server process [35918]
+INFO:     Started reloader process [64775] using StatReload
+INFO:     Started server process [64792]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-Databricks SDK not configured: cannot import name 'DefaultCredentialsError' from 'databricks.sdk.core' (/Users/taylor.hanson/Documents/supply-chain-agent/.venv/lib/python3.14/site-packages/databricks/sdk/core.py)
-INFO:     127.0.0.1:52014 - "OPTIONS /chat HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52014 - "POST /chat HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52053 - "POST /chat HTTP/1.1" 200 OK
+Running agent in LOCAL_MODE...
+/Users/taylor.hanson/Documents/supply-chain-agent/.venv/lib/python3.14/site-packages/mlflow/pyfunc/utils/data_validation.py:186: UserWarning: [33mAdd type hints to the `predict` method to enable data validation and automatic signature inference during model logging. Check https://mlflow.org/docs/latest/model/python_model.html#type-hint-usage-in-pythonmodel for more details.[0m
+  color_warning(
+INFO:     127.0.0.1:62579 - "POST /chat HTTP/1.1" 200 OK
+Running agent in LOCAL_MODE...
+INFO:     127.0.0.1:62616 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62729 - "OPTIONS /chat HTTP/1.1" 200 OK
+Running agent in LOCAL_MODE...
+Running agent in LOCAL_MODE...
+Running agent in LOCAL_MODE...
+INFO:     127.0.0.1:62729 - "POST /chat HTTP/1.1" 200 OK
 WARNING:  StatReload detected changes in 'backend/app.py'. Reloading...
 INFO:     Shutting down
 INFO:     Waiting for application shutdown.
 INFO:     Application shutdown complete.
-INFO:     Finished server process [35918]
-INFO:     Started server process [36017]
+INFO:     Finished server process [64792]
+INFO:     Started server process [67608]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-INFO:     127.0.0.1:52068 - "POST /chat HTTP/1.1" 500 Internal Server Error
+Running agent in LOCAL_MODE...
+/Users/taylor.hanson/Documents/supply-chain-agent/.venv/lib/python3.14/site-packages/mlflow/pyfunc/utils/data_validation.py:186: UserWarning: [33mAdd type hints to the `predict` method to enable data validation and automatic signature inference during model logging. Check https://mlflow.org/docs/latest/model/python_model.html#type-hint-usage-in-pythonmodel for more details.[0m
+  color_warning(
+INFO:     127.0.0.1:62789 - "POST /chat HTTP/1.1" 200 OK
+WARNING:  StatReload detected changes in 'backend/tools/mcp/ask_genie.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [67608]
+INFO:     Started server process [68851]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:63412 - "OPTIONS /chat HTTP/1.1" 200 OK
+Running agent in LOCAL_MODE...
+/Users/taylor.hanson/Documents/supply-chain-agent/.venv/lib/python3.14/site-packages/mlflow/pyfunc/utils/data_validation.py:186: UserWarning: [33mAdd type hints to the `predict` method to enable data validation and automatic signature inference during model logging. Check https://mlflow.org/docs/latest/model/python_model.html#type-hint-usage-in-pythonmodel for more details.[0m
+  color_warning(
+Running agent in LOCAL_MODE...
+Running agent in LOCAL_MODE...
+INFO:     127.0.0.1:63412 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49683 - "OPTIONS /clear_chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49683 - "POST /clear_chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49692 - "OPTIONS /chat HTTP/1.1" 200 OK
+Running agent in LOCAL_MODE...
+Running agent in LOCAL_MODE...
+INFO:     127.0.0.1:49692 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49816 - "POST /upload HTTP/1.1" 500 Internal Server Error
 WARNING:  StatReload detected changes in 'backend/app.py'. Reloading...
 INFO:     Shutting down
 INFO:     Waiting for application shutdown.
 INFO:     Application shutdown complete.
-INFO:     Finished server process [36017]
-INFO:     Started server process [36060]
+INFO:     Finished server process [68851]
+INFO:     Started server process [20123]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-INFO:     127.0.0.1:52078 - "POST /chat HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52091 - "POST /chat HTTP/1.1" 200 OK
-WARNING:  StatReload detected changes in 'backend/agent/model.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [36060]
-INFO:     Started server process [36435]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-WARNING:  StatReload detected changes in 'backend/app.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [36435]
-INFO:     Started server process [36567]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     127.0.0.1:52262 - "POST /chat HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52285 - "POST /chat HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52294 - "POST /chat HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52302 - "POST /chat HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52302 - "POST /chat HTTP/1.1" 200 OK
-WARNING:  StatReload detected changes in 'backend/agent/model.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [36567]
-INFO:     Started server process [37197]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     127.0.0.1:52743 - "OPTIONS /chat HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52743 - "POST /chat HTTP/1.1" 200 OK
-WARNING:  StatReload detected changes in 'backend/tools/uc_tools.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [37197]
-INFO:     Started server process [37767]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-WARNING:  StatReload detected changes in 'scripts/setup_uc.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [37767]
-INFO:     Started server process [37801]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     127.0.0.1:52984 - "POST /chat HTTP/1.1" 200 OK
-WARNING:  StatReload detected changes in 'backend/agent/model.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [37801]
-INFO:     Started server process [38311]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-WARNING:  StatReload detected changes in 'backend/agent/model.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [38311]
-INFO:     Started server process [38320]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-WARNING:  StatReload detected changes in 'backend/agent/model.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [38320]
-INFO:     Started server process [38338]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-WARNING:  StatReload detected changes in 'backend/agent/model.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [38338]
-INFO:     Started server process [38352]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     127.0.0.1:53092 - "POST /chat HTTP/1.1" 422 Unprocessable Content
-INFO:     127.0.0.1:53100 - "POST /chat HTTP/1.1" 200 OK
-INFO:     127.0.0.1:53107 - "POST /chat HTTP/1.1" 200 OK
-INFO:     127.0.0.1:53177 - "POST /chat HTTP/1.1" 200 OK
-WARNING:  StatReload detected changes in 'backend/agent/config.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [38352]
-INFO:     Started server process [40156]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-WARNING:  StatReload detected changes in 'backend/agent/model.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [40156]
-INFO:     Started server process [40173]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-WARNING:  StatReload detected changes in 'backend/agent/model.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [40173]
-INFO:     Started server process [40187]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-WARNING:  StatReload detected changes in 'backend/agent/model.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [40187]
-INFO:     Started server process [40201]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-WARNING:  StatReload detected changes in 'backend/agent/model.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [40201]
-INFO:     Started server process [40226]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-WARNING:  StatReload detected changes in 'backend/app.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [40226]
-INFO:     Started server process [40242]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-WARNING:  StatReload detected changes in 'backend/app.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [40242]
-INFO:     Started server process [40253]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-WARNING:  StatReload detected changes in 'scripts/setup_uc.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [40253]
-INFO:     Started server process [40279]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-WARNING:  StatReload detected changes in 'scripts/setup_uc.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [40279]
-INFO:     Started server process [40289]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-WARNING:  StatReload detected changes in 'backend/app.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [40289]
-INFO:     Started server process [40303]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-WARNING:  StatReload detected changes in 'backend/app.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [40303]
-INFO:     Started server process [40319]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-WARNING:  StatReload detected changes in 'backend/mcp_server.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [40319]
-INFO:     Started server process [40785]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-WARNING:  StatReload detected changes in 'backend/app.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [40785]
-INFO:     Started server process [40955]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     127.0.0.1:53768 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49931 - "POST /upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50021 - "POST /upload HTTP/1.1" 200 OK
+Running agent in LOCAL_MODE...
+/Users/taylor.hanson/Documents/supply-chain-agent/.venv/lib/python3.14/site-packages/mlflow/pyfunc/utils/data_validation.py:186: UserWarning: [33mAdd type hints to the `predict` method to enable data validation and automatic signature inference during model logging. Check https://mlflow.org/docs/latest/model/python_model.html#type-hint-usage-in-pythonmodel for more details.[0m
+  color_warning(
+Running agent in LOCAL_MODE...
+INFO:     127.0.0.1:50265 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50287 - "POST /upload HTTP/1.1" 200 OK
+Running agent in LOCAL_MODE...
+INFO:     127.0.0.1:50287 - "POST /chat HTTP/1.1" 200 OK
+Running agent in LOCAL_MODE...
+Running agent in LOCAL_MODE...
+INFO:     127.0.0.1:50301 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50338 - "OPTIONS /chat HTTP/1.1" 200 OK
+Running agent in LOCAL_MODE...
+Running agent in LOCAL_MODE...
+INFO:     127.0.0.1:50338 - "POST /chat HTTP/1.1" 200 OK

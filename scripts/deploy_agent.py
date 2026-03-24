@@ -1,10 +1,20 @@
 import os
 import mlflow
 from databricks import agents
+from databricks.sdk import WorkspaceClient
 from backend.agent.config import MODEL_NAME, CATALOG_SCHEMA, AGENT_ENDPOINT_NAME
 from backend.agent.model import log_agent_model
 
 def main():
+    # Force authentication using 'myenv' profile for agents.deploy
+    w = WorkspaceClient(profile="myenv")
+    auth_headers = w.config.authenticate()
+    os.environ["DATABRICKS_HOST"] = w.config.host
+    if isinstance(auth_headers, dict) and "Authorization" in auth_headers:
+        os.environ["DATABRICKS_TOKEN"] = auth_headers["Authorization"].replace("Bearer ", "")
+    elif w.config.token:
+        os.environ["DATABRICKS_TOKEN"] = w.config.token
+
     print(f"Logging agent model to UC: {MODEL_NAME}")
     
     # 1. Log the model

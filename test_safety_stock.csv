@@ -1,0 +1,11 @@
+sku,business_unit,min_stock_level,max_stock_level
+SKU-1001,Retail,50,200
+SKU-1002,E-Commerce,20,100
+SKU-1003,Wholesale,100,500
+SKU-1004,B2B,75,300
+SKU-1005,Direct,10,50
+SKU-1006,Retail,60,250
+SKU-1007,E-Commerce,15,80
+SKU-1008,Wholesale,120,600
+SKU-1009,B2B,90,350
+SKU-1010,Direct,5,30

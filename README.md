@@ -83,22 +83,29 @@ graph TD
 
 ## 4. Tooling and skill management
 
-We use a **hybrid, dynamically discovered tooling model** managed by `backend/tools/registry.py`.
+We use a **hybrid, dynamically discovered tooling model** managed by `backend/tools/registry.py`. We also support a **Skills Framework** for cognitive SOPs.
 
-### A. UC Functions (data and logic)
+### A. Skills (Cognitive SOPs)
+
+**Use case:** Providing the agent with standard operating procedures on how to analyze data, what policies to follow, or how to chain tools together for a specific business process.
+
+- **Registration:** Add a `.md` file to `backend/skills/` with a YAML frontmatter `description`.
+- **Execution:** The agent reads the description in its system prompt and uses the `read_skill` tool to read the markdown instructions when relevant.
+
+### B. UC Functions (data and logic)
 
 **Use case:** Any tool that queries the lakehouse.
 
-- **Registration:** Defined in Python (`uc_tools.py`), schemas are dynamically extracted via inspection, and executed natively via SQL (`main.supply_chain_schema.*`).
-- **Examples:** `get_inventory`, `get_supplier_lead_times`, `draft_purchase_order`.
+- **Registration:** Defined in Python (`backend/tools/uc_tools.py`), schemas are dynamically extracted via inspection, and executed natively via SQL (`main.supply_chain_schema.*`).
+- **Examples:** `get_inventory`, `get_supplier_lead_times`.
 
-### B. FastMCP bridge (external connectivity)
+### C. FastMCP bridge (external connectivity)
 
-**Use case:** External actions like ERP checks or Slack notifications.
+**Use case:** External actions like ERP checks, Slack notifications, or processing uploaded files.
 
-- **Registration:** Defined in `mcp_server.py`. The registry tags these as `fastmcp`. 
-- **Execution:** Instead of running natively in Databricks, the agent yields a JSON payload telling FastAPI to execute the local FastMCP function and format the output.
-- **Examples:** `get_erp_supplier_status`, `notify_slack_channel`.
+- **Registration:** Defined as individual `.py` files in `backend/tools/mcp/`. The registry automatically tags these as `fastmcp` tools. 
+- **Execution:** Instead of running natively in Databricks, the agent yields a JSON payload telling FastAPI to execute the local FastMCP function, update the conversation history, and allow the agent to synthesize the result.
+- **Examples:** `get_erp_supplier_status`, `notify_slack_channel`, `manage_safety_stock`.
 
 ---
 
@@ -110,12 +117,14 @@ We use a **hybrid, dynamically discovered tooling model** managed by `backend/to
 /
 ├── backend/
 │   ├── app.py                 # FastAPI entry point & FastMCP payload router
-│   ├── mcp_server.py          # FastMCP server logic and tool definitions
 │   ├── agent/
 │   │   ├── model.py           # Custom PyFunc Agent logic (MLflow-logged)
-│   │   └── config.py          # Workspace configurations
+│   │   ├── config.py          # Workspace configurations
+│   │   └── prompt.md          # Core agent personality and system instructions
+│   ├── skills/                # Markdown SOPs (e.g. analyze_safety_stock.md)
 │   └── tools/
-│       ├── registry.py        # Dynamic tool discovery and schema generator
+│       ├── mcp/               # Individual FastMCP tools (e.g. notify_slack.py)
+│       ├── registry.py        # Dynamic tool/skill discovery
 │       └── uc_tools.py        # UC tool schema definitions
 ├── frontend/                  # React + Tailwind UI
 │   └── src/
@@ -129,16 +138,19 @@ We use a **hybrid, dynamically discovered tooling model** managed by `backend/to
 
 ### Backend: FastAPI orchestration
 
-FastAPI acts as a proxy and FastMCP router. If the agent returns a `fastmcp_tool_call` JSON payload, FastAPI executes it locally.
+FastAPI acts as a proxy and FastMCP router. It manages an in-memory `session_history` dictionary to retain conversation context. If the agent returns a `fastmcp_tool_call` JSON payload, FastAPI executes it locally and feeds the result back into the agent loop.
 
 ```python
 # backend/app.py logic snippet
 if parsed_msg.get("type") == "fastmcp_tool_call":
     tool_name = parsed_msg.get("tool")
     args = parsed_msg.get("arguments", {})
-    # Execute the local tool from mcp_server.py
-    result = execute_local_mcp_tool(tool_name, args)
-    return ChatResponse(message=f"FastMCP executed tool `{tool_name}`... Result: {result}")
+    # Dynamically load and execute the local tool from backend/tools/mcp/
+    module = importlib.import_module(f"backend.tools.mcp.{tool_name}")
+    result = getattr(module, tool_name)(**args)
+    # Append result to history and continue the agent loop
+    session_history[session_id].append({"role": "tool", "content": result})
+    continue
 ```
 
 ### Agent logic
@@ -258,7 +270,8 @@ sequenceDiagram
 | **Phase 1 (MVP)** | Read-only Lakehouse | ✅ Done | FastAPI + React. Read-only UC tools. Agent deployment. Data seeding. |
 | **Phase 2** | Write-back & Tooling | ✅ Done | Dynamic tool registry. `draft_purchase_order` tool. |
 | **Phase 3** | External Integrations | ✅ Done | FastMCP backend routing for `notify_slack_channel` and `get_erp_supplier_status`. |
-| **Phase 4** | Advanced Capabilities | ⏳ Pending | File uploads (CSV processing for bulk actions). |
+| **Phase 4** | Advanced Capabilities | ✅ Done | File uploads (CSV/XLSX processing), `manage_safety_stock` tool. |
+| **Phase 5** | Cognitive SOPs | ✅ Done | Dynamic Skill framework (`backend/skills/`) for markdown-based agent procedures. |
 
 ---
 
@@ -266,10 +279,10 @@ sequenceDiagram
 
 **Suggested next steps**
 
-1. Implement file uploads (CSV processing) to allow users to upload files and ask the agent to parse/act on them.
-2. Refine the UI to handle multi-turn streaming and structured markdown responses better.
-3. Set up evaluation notebooks for Golden questions and tracing accuracy.
+1. Set up evaluation notebooks for Golden questions and tracing accuracy.
+2. Add more complex UC functions that require cross-table joins.
+3. Add a dedicated vector search tool for retrieving external context.
 
 ---
 
-*Document version: 0.2.0 — Updated with dynamic tool routing and FastMCP integration.*
+*Document version: 0.3.0 — Updated with Skills framework, file uploads, and history persistence.*

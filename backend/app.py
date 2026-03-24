@@ -71,10 +71,20 @@ async def chat(request: ChatRequest):
                 })
             else:
                 # Call the hosted agent endpoint
-                response = w.serving_endpoints.query(
-                    name=AGENT_ENDPOINT_NAME,
-                    inputs={"messages": session_history[request.session_id]}
-                )
+                try:
+                    response = w.serving_endpoints.query(
+                        name=AGENT_ENDPOINT_NAME,
+                        inputs={"messages": session_history[request.session_id]}
+                    )
+                except Exception as endpoint_err:
+                    print(f"DEBUG: Endpoint query failed: {endpoint_err}")
+                    if "missing inputs ['query']" in str(endpoint_err):
+                        response = w.serving_endpoints.query(
+                            name=AGENT_ENDPOINT_NAME,
+                            inputs={"query": request.query, "messages": session_history[request.session_id]}
+                        )
+                    else:
+                        raise endpoint_err
                 predictions = response.predictions if hasattr(response, 'predictions') else []
                 
             output_msg = predictions[0] if isinstance(predictions, list) and len(predictions) > 0 else "No response from agent."
@@ -150,6 +160,8 @@ async def chat(request: ChatRequest):
         )
     except Exception as e:
         error_msg = str(e)
+        import traceback
+        traceback.print_exc()
         if "not ready" in error_msg.lower() or "not_ready" in error_msg.lower() or "503" in error_msg:
             return ChatResponse(message="⏳ The Databricks Agent endpoint is still provisioning. This usually takes 5-10 minutes. Please try again shortly!")
         raise HTTPException(status_code=500, detail=f"Error querying agent endpoint: {error_msg}")
@@ -157,14 +169,17 @@ async def chat(request: ChatRequest):
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     try:
+        import io
         catalog, schema = CATALOG_SCHEMA.split(".")
         volume_path = f"/Volumes/{catalog}/{schema}/uploads/{file.filename}"
         
         contents = await file.read()
-        w.files.upload(volume_path, contents, overwrite=True)
+        w.files.upload(volume_path, io.BytesIO(contents), overwrite=True)
         
         return {"filename": file.filename, "volume_path": volume_path, "status": "uploaded"}
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 if __name__ == "__main__":

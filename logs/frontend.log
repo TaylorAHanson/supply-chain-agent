@@ -1,16 +1,15 @@
+npm warn Unknown env config "devdir". This will stop working in the next major version of npm.
 
 > frontend@0.0.0 dev
 > vite
 
 
-  VITE v8.0.1  ready in 243 ms
+  VITE v8.0.1  ready in 140 ms
 
   ➜  Local:   http://localhost:5173/
   ➜  Network: use --host to expose
-9:05:54 AM [vite] (client) hmr update /src/App.tsx, /src/index.css
-9:06:02 AM [vite] (client) hmr update /src/App.tsx, /src/index.css
-9:39:03 AM [vite] (client) [console.error] Error: TypeError: Failed to fetch
-    at handleSubmit (http://localhost:5173/src/App.tsx?t=1774364762234:32:27)
+11:38:32 AM [vite] (client) [console.error] Error: TypeError: Failed to fetch
+    at handleSubmit (http://localhost:5173/src/App.tsx:32:27)
     at executeDispatch (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=e4530b32:9140:5)
     at runWithFiberInDEV (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=e4530b32:850:66)
     at processDispatchQueue (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=e4530b32:9166:27)
@@ -19,27 +18,9 @@
     at dispatchEventForPluginEventSystem (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=e4530b32:9239:4)
     at dispatchEvent (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=e4530b32:11318:29)
     at dispatchDiscreteEvent (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=e4530b32:11300:56)
-9:39:12 AM [vite] (client) [console.error] Error: TypeError: Failed to fetch
-    at handleSubmit (http://localhost:5173/src/App.tsx?t=1774364762234:32:27)
-    at executeDispatch (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=e4530b32:9140:5)
-    at runWithFiberInDEV (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=e4530b32:850:66)
-    at processDispatchQueue (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=e4530b32:9166:27)
-    at http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=e4530b32:9453:5
-    at batchedUpdates$1 (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=e4530b32:2043:12)
-    at dispatchEventForPluginEventSystem (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=e4530b32:9239:4)
-    at dispatchEvent (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=e4530b32:11318:29)
-    at dispatchDiscreteEvent (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=e4530b32:11300:56)
-9:43:42 AM [vite] (client) [console.error] Error: TypeError: Failed to fetch
-    at handleSubmit (http://localhost:5173/src/App.tsx?t=1774364762234:32:27)
-    at executeDispatch (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=e4530b32:9140:5)
-    at runWithFiberInDEV (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=e4530b32:850:66)
-    at processDispatchQueue (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=e4530b32:9166:27)
-    at http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=e4530b32:9453:5
-    at batchedUpdates$1 (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=e4530b32:2043:12)
-    at dispatchEventForPluginEventSystem (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=e4530b32:9239:4)
-    at dispatchEvent (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=e4530b32:11318:29)
-    at dispatchDiscreteEvent (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=e4530b32:11300:56)
-9:45:43 AM [vite] (client) hmr update /src/App.tsx, /src/index.css
-9:57:15 AM [vite] (client) hmr update /src/index.css
-9:57:25 AM [vite] (client) hmr update /src/App.tsx, /src/index.css
-10:00:46 AM [vite] (client) hmr update /src/index.css
+12:51:36 PM [vite] (client) [console.error] Erro12:56:40 PM [vite] (client) hmr update /src/App.tsx, /src/index.css
+12:57:32 PM [vite] (client) hmr update /src/App.tsx, /src/index.css
+12:59:06 PM [vite] (client) hmr update /src/App.tsx, /src/index.css
+1:02:33 PM [vite] (client) hmr update /src/App.tsx, /src/index.css
+1:02:33 PM [vite] (client) hmr update /src/App.tsx, /src/index.css
+1:02:41 PM [vite] (clie1:02:41 PM [vite] (client) hmr update /src/index.css

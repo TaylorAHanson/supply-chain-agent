@@ -61,8 +61,8 @@ class SupplyChainPyFuncAgent(mlflow.pyfunc.PythonModel):
             # For foundation models, it takes OpenAI-like kwargs, but since tools is missing, 
             # we use the raw REST API via the `w.api_client` or wrap it in custom_inputs.
             
-            from openai import OpenAI
             import os
+            import requests
             
             headers = self.w.config.authenticate()
             if isinstance(headers, dict) and "Authorization" in headers:
@@ -70,19 +70,58 @@ class SupplyChainPyFuncAgent(mlflow.pyfunc.PythonModel):
             else:
                 token = self.w.config.token
                 
-            client = OpenAI(
-                api_key=token,
-                base_url=f"{self.w.config.host.rstrip('/')}/serving-endpoints"
+            # The OpenAI python client is incompatible with the latest httpx (0.28.1)
+            # because httpx removed the 'proxies' kwarg, but openai still attempts to use it.
+            # So, we'll manually formulate the REST API request instead to bypass the broken OpenAI client.
+            url = f"{self.w.config.host.rstrip('/')}/serving-endpoints/{LLM_MODEL_NAME}/invocations"
+            
+            payload = {
+                "messages": messages,
+                "max_tokens": MAX_TOKENS
+            }
+            if tool_schemas:
+                payload["tools"] = tool_schemas
+                
+            resp = requests.post(
+                url, 
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json=payload
             )
             
-            response = client.chat.completions.create(
-                model=LLM_MODEL_NAME,
-                messages=messages,
-                tools=tool_schemas,
-                max_tokens=MAX_TOKENS
-            )
+            if resp.status_code != 200:
+                return [f"Agent Error during LLM request: {resp.text}"]
+                
+            resp_data = resp.json()
+            choice = resp_data.get("choices", [{}])[0]
+            message_dict = choice.get("message", {})
             
-            message = response.choices[0].message
+            # Reconstruct the expected object structure for backward compatibility in our code
+            class MessageResponse:
+                def __init__(self, m):
+                    self.content = m.get("content")
+                    self.tool_calls = None
+                    if m.get("tool_calls"):
+                        class ToolCallResponse:
+                            def __init__(self, t):
+                                self.id = t.get("id")
+                                class FuncResponse:
+                                    def __init__(self, f):
+                                        self.name = f.get("name")
+                                        args = f.get("arguments")
+                                        if isinstance(args, dict):
+                                            import json
+                                            self.arguments = json.dumps(args)
+                                        else:
+                                            self.arguments = args
+                                self.function = FuncResponse(t.get("function", {}))
+                            def as_dict(self):
+                                return {"id": self.id, "type": "function", "function": {"name": self.function.name, "arguments": self.function.arguments}}
+                        self.tool_calls = [ToolCallResponse(t) for t in m.get("tool_calls")]
+                
+                def model_dump(self, **kwargs):
+                    return message_dict
+                    
+            message = MessageResponse(message_dict)
             
             # Fallback for Databricks Foundation Model text-based tool calls
             if not message.tool_calls and message.content and "<function=" in message.content:
@@ -144,13 +183,18 @@ class SupplyChainPyFuncAgent(mlflow.pyfunc.PythonModel):
                         "content": str(res)
                     })
                     
-                    final_response = client.chat.completions.create(
-                        model=LLM_MODEL_NAME,
-                        messages=messages,
-                        max_tokens=MAX_TOKENS
+                    payload["messages"] = messages
+                    final_resp = requests.post(
+                        url, 
+                        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                        json=payload
                     )
                     
-                    return [final_response.choices[0].message.content]
+                    if final_resp.status_code != 200:
+                        return [f"Agent Error during final response: {final_resp.text}"]
+                        
+                    final_choice = final_resp.json().get("choices", [{}])[0]
+                    return [final_choice.get("message", {}).get("content", "")]
                     
                 elif execution_type == "fastmcp":
                     # FAST_MCP ROUTING: Return a special payload to tell FastAPI to execute this
