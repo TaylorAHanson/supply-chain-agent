@@ -157,14 +157,8 @@ function App() {
       <header className="bg-white shadow-sm px-4 py-2 flex justify-between items-center">
         <div>
           <h1 className="text-base font-semibold text-gray-800">Supply Chain Agent</h1>
-          <p className="text-xs text-gray-500">Databricks Agent Framework + FastMCP</p>
+          <p className="text-[10px] text-gray-500">Databricks Agent Framework + FastMCP</p>
         </div>
-        <button
-          onClick={handleClearChat}
-          className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded border border-gray-300 transition-colors"
-        >
-          Clear
-        </button>
       </header>
 
       <main className="flex-1 overflow-y-auto p-3">
@@ -242,6 +236,14 @@ function App() {
               className="bg-blue-600 text-white px-4 py-1.5 rounded text-xs font-medium hover:bg-blue-700 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
             >
               Send
+            </button>
+            <button
+              type="button"
+              onClick={handleClearChat}
+              disabled={isLoading}
+              className="bg-gray-100 text-gray-700 border border-gray-300 px-3 py-1.5 rounded text-xs font-medium hover:bg-gray-200 focus:outline-none focus:ring-1 focus:ring-gray-400 focus:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+            >
+              Clear
             </button>
           </form>
         </div>
