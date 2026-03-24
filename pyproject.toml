@@ -1,0 +1,22 @@
+[project]
+name = "supply-chain-agent"
+version = "0.1.0"
+description = "Supply Chain AI Agent with Databricks Agent Framework"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "databricks-sdk",
+    "databricks-agents",
+    "mlflow",
+    "mcp"
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["backend*"]
