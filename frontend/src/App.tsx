@@ -159,6 +159,24 @@ function App() {
           <h1 className="text-base font-semibold text-gray-800">Supply Chain Agent</h1>
           <p className="text-[10px] text-gray-500">Databricks Agent Framework + FastMCP</p>
         </div>
+        <div className="flex space-x-2">
+          <a 
+            href="https://github.com/taylor-hanson_data/supply-chain-agent/blob/main/README.md" 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="text-[10px] text-blue-600 hover:text-blue-800 hover:underline"
+          >
+            Docs
+          </a>
+          <a 
+            href="https://github.com/taylor-hanson_data/supply-chain-agent/blob/main/CONTRIBUTING.md" 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="text-[10px] text-blue-600 hover:text-blue-800 hover:underline"
+          >
+            Contribute
+          </a>
+        </div>
       </header>
 
       <main className="flex-1 overflow-y-auto p-3">
