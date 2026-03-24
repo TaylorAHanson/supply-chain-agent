@@ -21,6 +21,9 @@ wheels/
 .installed.cfg
 *.egg
 
+# Logs
+logs/*
+
 # Virtual environments
 .env
 .venv
