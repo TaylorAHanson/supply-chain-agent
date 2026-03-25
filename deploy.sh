@@ -31,22 +31,41 @@ echo "LLM Model:       $LLM_MODEL_NAME"
 echo "----------------------------------------"
 
 echo "📦 Setting up Python environment..."
-if [ ! -d ".venv" ]; then
+if [[ ! -d ".venv" ]]; then
     python -m venv .venv
 fi
-source .venv/bin/activate
-pip install -r requirements.txt > /dev/null
+
+# Activate virtual environment (cross-platform compatible for Mac/Linux and Windows Git Bash)
+if [[ -f ".venv/bin/activate" ]]; then
+    source .venv/bin/activate
+    PYTHON_EXEC="python"
+elif [[ -f ".venv/Scripts/activate" ]]; then
+    source .venv/Scripts/activate
+    PYTHON_EXEC=".venv/Scripts/python.exe"
+else
+    echo "⚠️  Warning: Could not find virtual environment activation script."
+    PYTHON_EXEC="python"
+fi
+
+echo "🔍 Using Python executable: $PYTHON_EXEC"
+$PYTHON_EXEC -c "import sys; print('Python sys.executable:', sys.executable)"
+
+# Upgrade pip first, then install requirements
+echo "📦 Installing Python dependencies..."
+$PYTHON_EXEC -m pip install --default-timeout=100 --upgrade pip
+$PYTHON_EXEC -m pip install --default-timeout=100 -r requirements.txt
 
 echo "📦 Setting up Frontend environment..."
 cd frontend
-npm install > /dev/null
+# Remove > /dev/null so we can see what npm is hanging on
+npm install
 npm run build
 cd ..
 
 echo "🚀 Logging & Deploying Agent to Databricks Model Serving..."
 # This script registers the MLflow model to UC and creates/updates the serving endpoint
 export PYTHONPATH=.
-python scripts/deploy_agent.py
+$PYTHON_EXEC -m scripts.deploy_agent
 
 echo "✅ Deployment initiated!"
 echo "Check the Databricks UI to monitor the endpoint provisioning status."

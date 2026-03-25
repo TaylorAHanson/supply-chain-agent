@@ -16,7 +16,8 @@ class SupplyChainLangGraphAgent(mlflow.pyfunc.ResponsesAgent):
         from backend.tools.registry import get_langchain_tools, discover_skills
         
         # Initialize Databricks SDK
-        self.w = WorkspaceClient(profile=os.getenv("DATABRICKS_PROFILE", "myenv"))
+        profile = os.getenv("DATABRICKS_PROFILE", "myenv")
+        self.w = WorkspaceClient(profile=profile)
         
         # Get authentication token and host
         headers = self.w.config.authenticate()

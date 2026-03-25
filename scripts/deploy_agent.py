@@ -6,8 +6,11 @@ from backend.agent.config import MODEL_NAME, CATALOG_SCHEMA, AGENT_ENDPOINT_NAME
 from backend.agent.model import log_agent_model
 
 def main():
-    # Force authentication using 'myenv' profile for agents.deploy
-    w = WorkspaceClient(profile="myenv")
+    import os
+    profile = os.environ.get("DATABRICKS_PROFILE", "myenv")
+    
+    # Force authentication using the configured profile for agents.deploy
+    w = WorkspaceClient(profile=profile)
     auth_headers = w.config.authenticate()
     os.environ["DATABRICKS_HOST"] = w.config.host
     if isinstance(auth_headers, dict) and "Authorization" in auth_headers:
@@ -19,15 +22,25 @@ def main():
     
     # 1. Log the model
     # Note: MLflow requires the registry_uri to be set to databricks-uc
-    mlflow.set_tracking_uri("databricks://myenv")
-    mlflow.set_registry_uri("databricks-uc://myenv")
+    mlflow.set_tracking_uri(f"databricks://{profile}")
+    mlflow.set_registry_uri(f"databricks-uc://{profile}")
+    
+    # Configure MLflow HTTP timeout (prevent 5 minute hangs)
+    os.environ["MLFLOW_HTTP_REQUEST_TIMEOUT"] = "60"
+    
+    # We will log without hitting AWS S3 directly for artifacts if the connection is slow.
+    # MLflow can try to upload files directly to the storage backend (S3/ADLS) from your machine.
+    # We can ask MLflow to route it through the Databricks control plane instead if it hangs.
+    # The default upload is sometimes blocked by corporate network egress rules because it hits cloud storage URLs directly.
+    os.environ["MLFLOW_ENABLE_MULTIPART_UPLOAD"] = "false"
+    os.environ["DATABRICKS_DISABLE_DIRECT_UPLOAD"] = "true"
     
     # Set the experiment
     import json
     import subprocess
     # Find user email via databricks CLI to use as experiment path
     user_email = subprocess.check_output(
-        ["databricks", "current-user", "me", "--profile", "myenv"], 
+        ["databricks", "current-user", "me", "--profile", profile], 
         text=True
     ).strip()
     try:

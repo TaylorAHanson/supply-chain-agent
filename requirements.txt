@@ -38,3 +38,9 @@ urllib3==2.6.3
 uuid_utils==0.14.1
 xxhash==3.6.0
 zstandard==0.25.0
+uvicorn==0.34.0
+fastapi==0.115.8
+mlflow==3.10.1
+databricks-sdk==0.102.0
+pandas==2.3.3
+databricks-agents==1.9.3
