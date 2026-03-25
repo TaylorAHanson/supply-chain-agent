@@ -1,6 +1,7 @@
 import mlflow
 from backend.agent.config import MODEL_NAME, CATALOG_SCHEMA, LLM_ENDPOINT_URL, MAX_TOKENS, LLM_MODEL_NAME
 import os
+from typing import Generator
 
 class SupplyChainLangGraphAgent(mlflow.pyfunc.ResponsesAgent):
     def __init__(self):
@@ -30,7 +31,8 @@ class SupplyChainLangGraphAgent(mlflow.pyfunc.ResponsesAgent):
             model=LLM_MODEL_NAME,
             api_key=token,
             base_url=f"{host}/serving-endpoints",
-            max_tokens=MAX_TOKENS
+            max_tokens=MAX_TOKENS,
+            streaming=True # Enable streaming on the LLM client
         )
         
         # Build System Prompt
@@ -58,33 +60,62 @@ class SupplyChainLangGraphAgent(mlflow.pyfunc.ResponsesAgent):
         return langchain_msgs
 
     def predict(self, request: mlflow.types.responses.ResponsesAgentRequest) -> mlflow.types.responses.ResponsesAgentResponse:
+        """Non-streaming predict: collects all streaming chunks into a single response."""
+        output_items = []
+        custom_outputs = {}
+        for stream_event in self.predict_stream(request):
+            if stream_event.type == "response.output_item.done":
+                output_items.append(stream_event.item)
+            elif stream_event.type == "custom_outputs":
+                custom_outputs = getattr(stream_event, "custom_outputs", {})
+                
+        return mlflow.types.responses.ResponsesAgentResponse(
+            output=output_items,
+            custom_outputs=custom_outputs
+        )
+        
+    def predict_stream(
+        self, request: mlflow.types.responses.ResponsesAgentRequest
+    ) -> Generator[mlflow.types.responses.ResponsesAgentStreamEvent, None, None]:
         import uuid
         
-        # Convert incoming messages to LangGraph format
         messages = self.prep_msgs_for_llm([i.model_dump() for i in request.input])
         input_len = len(messages)
         
-        # Run the agent (LangGraph handles the Thought/Action/Observation loop)
-        result = self.agent.invoke({"messages": messages})
+        item_id = str(uuid.uuid4())
+        aggregated_stream = ""
         
-        # Extract the new messages generated during this turn
-        new_messages = result["messages"][input_len:]
-        
+        # Stream events from LangGraph
+        for event in self.agent.stream({"messages": messages}, stream_mode="messages"):
+            msg = event[0]
+            
+            # If the LLM is streaming chunks of the final response
+            if hasattr(msg, "content") and isinstance(msg.content, str) and msg.content:
+                chunk = msg.content.replace(aggregated_stream, "") # Get only the new part if it's aggregating
+                if chunk:
+                    aggregated_stream += chunk
+                    yield self.create_text_delta(delta=chunk, item_id=item_id)
+                    
+        # Extract tool calls from the final state to return as custom outputs
+        final_state = self.agent.get_state({"messages": messages})
         tool_calls_executed = []
-        for msg in new_messages:
-            if hasattr(msg, "tool_calls") and msg.tool_calls:
-                for tc in msg.tool_calls:
-                    tool_calls_executed.append({"tool_name": tc.get("name", "unknown"), "status": "executed inside agent"})
-        
-        # Extract the final message
-        final_message = result["messages"][-1].content
-        
-        # Return standard MLflow ResponsesAgentResponse with custom outputs
-        output_item = self.create_text_output_item(text=final_message, id=str(uuid.uuid4()))
-        return mlflow.types.responses.ResponsesAgentResponse(
-            output=[output_item],
-            custom_outputs={"tool_calls": tool_calls_executed}
+        if final_state and hasattr(final_state, "values") and "messages" in final_state.values:
+            new_messages = final_state.values["messages"][input_len:]
+            for m in new_messages:
+                if hasattr(m, "tool_calls") and m.tool_calls:
+                    for tc in m.tool_calls:
+                        tool_calls_executed.append({"tool_name": tc.get("name", "unknown"), "status": "executed inside agent"})
+                        
+        # Yield the custom outputs event (this is a bit of a hack since StreamEvent doesn't natively have custom_outputs, 
+        # but we can attach it to the final done event or yield a dummy event)
+        done_event = mlflow.types.responses.ResponsesAgentStreamEvent(
+            type="response.output_item.done",
+            item=self.create_text_output_item(text=aggregated_stream, id=item_id)
         )
+        # Monkey patch custom_outputs onto the event so our wrapper can catch it, 
+        # though standard Databricks serving might ignore it on the stream end.
+        done_event.custom_outputs = {"tool_calls": tool_calls_executed}
+        yield done_event
 
 def log_agent_model():
     """

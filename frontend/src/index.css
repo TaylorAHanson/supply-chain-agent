@@ -1,32 +1,81 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 
 :root {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
+/* Base styles for markdown rendering inside the chat bubble */
 .agent-message-content {
-  /* removed white-space: pre-wrap to avoid breaking html layouts */
+  color: inherit;
+}
+.agent-message-content p {
+  margin-bottom: 0.5em;
+  margin-top: 0;
+}
+.agent-message-content p:last-child {
+  margin-bottom: 0;
 }
 .agent-message-content ul {
   list-style-type: disc;
-  padding-left: 1rem;
-  margin-top: 0.25rem;
-  margin-bottom: 0.25rem;
+  padding-left: 1.5em;
+  margin-top: 0.25em;
+  margin-bottom: 0.5em;
 }
 .agent-message-content ol {
   list-style-type: decimal;
-  padding-left: 1rem;
-  margin-top: 0.25rem;
-  margin-bottom: 0.25rem;
+  padding-left: 1.5em;
+  margin-top: 0.25em;
+  margin-bottom: 0.5em;
 }
 .agent-message-content li {
-  margin-bottom: 0.125rem;
+  margin-bottom: 0.25em;
 }
-.agent-message-content p {
-  margin-bottom: 0.5rem;
-}
-.agent-message-content h1, .agent-message-content h2, .agent-message-content h3 {
+.agent-message-content h1, 
+.agent-message-content h2, 
+.agent-message-content h3 {
   font-weight: 600;
-  margin-top: 0.5rem;
-  margin-bottom: 0.25rem;
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+}
+.agent-message-content h1 { font-size: 1.25em; }
+.agent-message-content h2 { font-size: 1.1em; }
+.agent-message-content h3 { font-size: 1.05em; }
+
+.agent-message-content pre {
+  background-color: #f3f4f6;
+  padding: 0.75em;
+  border-radius: 0.375rem;
+  overflow-x: auto;
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+.agent-message-content code {
+  background-color: #f3f4f6;
+  padding: 0.125em 0.25em;
+  border-radius: 0.25rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.875em;
+}
+.agent-message-content pre code {
+  background-color: transparent;
+  padding: 0;
+}
+
+.agent-message-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+  font-size: 0.875em;
+}
+.agent-message-content th,
+.agent-message-content td {
+  border: 1px solid #e5e7eb;
+  padding: 0.5em;
+  text-align: left;
+}
+.agent-message-content th {
+  background-color: #f9fafb;
+  font-weight: 600;
 }

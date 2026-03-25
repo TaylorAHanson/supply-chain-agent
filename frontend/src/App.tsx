@@ -1,5 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
 
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+
 interface ToolCall {
   tool_name: string;
   status: string;
@@ -35,7 +38,13 @@ function App() {
 
     const userMessage = input.trim()
     setInput('')
-    setMessages(prev => [...prev, { role: 'user', content: userMessage }])
+    
+    // Add user message and a placeholder for the assistant's response
+    setMessages(prev => [
+      ...prev, 
+      { role: 'user', content: userMessage },
+      { role: 'assistant', content: '', tool_calls: [] } // Placeholder
+    ])
     setIsLoading(true)
 
     try {
@@ -54,20 +63,82 @@ function App() {
         throw new Error('Failed to get response')
       }
 
-      const data = await response.json()
-      setMessages(prev => [...prev, { 
-        role: 'assistant', 
-        content: data.message,
-        tool_calls: data.tool_calls 
-      }])
+      // Check if it's an event stream (LOCAL_MODE)
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("text/event-stream")) {
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder("utf-8");
+        
+        if (reader) {
+          setIsLoading(false); // Stop loading animation since streaming started
+          
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            const chunk = decoder.decode(value, { stream: true });
+            const lines = chunk.split('\n');
+            
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                const dataStr = line.substring(6);
+                if (dataStr === '[DONE]') break;
+                
+                try {
+                  const data = JSON.parse(dataStr);
+                  if (data.type === 'chunk') {
+                    setMessages(prev => {
+                      const newMessages = [...prev];
+                      const lastMessage = newMessages[newMessages.length - 1];
+                      if (lastMessage.role === 'assistant') {
+                        lastMessage.content += data.content;
+                      }
+                      return newMessages;
+                    });
+                  } else if (data.type === 'tool_calls') {
+                    setMessages(prev => {
+                      const newMessages = [...prev];
+                      const lastMessage = newMessages[newMessages.length - 1];
+                      if (lastMessage.role === 'assistant') {
+                        lastMessage.tool_calls = data.content;
+                      }
+                      return newMessages;
+                    });
+                  }
+                } catch (e) {
+                  // Ignore parse errors for incomplete JSON chunks
+                }
+              }
+            }
+          }
+        }
+      } else {
+        // Standard JSON response
+        const data = await response.json()
+        setMessages(prev => {
+          const newMessages = [...prev];
+          // Replace the placeholder with the actual response
+          newMessages[newMessages.length - 1] = {
+            role: 'assistant',
+            content: data.message,
+            tool_calls: data.tool_calls
+          };
+          return newMessages;
+        });
+        setIsLoading(false);
+      }
+      
     } catch (error) {
       console.error('Error:', error)
-      setMessages(prev => [...prev, { 
-        role: 'assistant', 
-        content: 'Sorry, I encountered an error communicating with the server.' 
-      }])
-    } finally {
-      setIsLoading(false)
+      setMessages(prev => {
+        const newMessages = [...prev];
+        newMessages[newMessages.length - 1] = {
+          role: 'assistant',
+          content: 'Sorry, I encountered an error communicating with the server.'
+        };
+        return newMessages;
+      });
+      setIsLoading(false);
     }
   }
 
@@ -173,10 +244,11 @@ function App() {
                 {msg.role === 'user' ? (
                   <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
                 ) : (
-                  <div 
-                    className="agent-message-content leading-relaxed" 
-                    dangerouslySetInnerHTML={{ __html: msg.content }} 
-                  />
+                  <div className="agent-message-content leading-relaxed prose prose-sm max-w-none">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {msg.content}
+                    </ReactMarkdown>
+                  </div>
                 )}
                 
                 {msg.tool_calls && msg.tool_calls.length > 0 && (

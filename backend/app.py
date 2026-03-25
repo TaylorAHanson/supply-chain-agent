@@ -64,21 +64,36 @@ async def chat(request: ChatRequest):
                 input=[{"role": msg["role"], "content": msg["content"]} for msg in session_history[request.session_id]]
             )
             
-            response = agent.predict(req)
-            output_item = response.output[0]
-            output_msg = output_item.content if hasattr(output_item, 'content') else output_item.get("content", "")
+            # Use Server-Sent Events to stream the response
+            from fastapi.responses import StreamingResponse
+            import json
             
-            if isinstance(output_msg, list) and len(output_msg) > 0:
-                first_item = output_msg[0]
-                if hasattr(first_item, "text"):
-                    output_msg = first_item.text
-                elif isinstance(first_item, dict):
-                    output_msg = first_item.get("text", str(output_msg))
+            async def event_generator():
+                nonlocal tool_calls_executed
+                output_msg = ""
+                try:
+                    for stream_event in agent.predict_stream(req):
+                        if stream_event.type == "output_text.delta":
+                            chunk = stream_event.delta
+                            if chunk:
+                                output_msg += chunk
+                                yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
+                        elif stream_event.type == "response.output_item.done":
+                            # We monkey patched custom_outputs onto the done event in model.py
+                            if hasattr(stream_event, "custom_outputs"):
+                                tool_calls_executed = stream_event.custom_outputs.get("tool_calls", [])
+                                yield f"data: {json.dumps({'type': 'tool_calls', 'content': tool_calls_executed})}\n\n"
+                except Exception as stream_err:
+                    print(f"DEBUG: Streaming error: {stream_err}")
+                    import traceback
+                    traceback.print_exc()
+                    yield f"data: {json.dumps({'type': 'error', 'content': str(stream_err)})}\n\n"
+                finally:
+                    # Normal response received, break loop
+                    session_history[request.session_id].append({"role": "assistant", "content": output_msg})
+                    yield "data: [DONE]\n\n"
                     
-            if hasattr(response, 'custom_outputs') and response.custom_outputs:
-                tool_calls_executed = response.custom_outputs.get("tool_calls", [])
-            elif isinstance(response, dict) and "custom_outputs" in response:
-                tool_calls_executed = response["custom_outputs"].get("tool_calls", [])
+            return StreamingResponse(event_generator(), media_type="text/event-stream")
                 
         else:
             # Call the hosted agent endpoint
