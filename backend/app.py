@@ -73,12 +73,15 @@ async def chat(request: ChatRequest):
                 output_msg = ""
                 try:
                     for stream_event in agent.predict_stream(req):
-                        if stream_event.type == "output_text.delta":
-                            chunk = stream_event.delta
+                        # The type could be accessible via attribute or dict key depending on MLflow version
+                        event_type = getattr(stream_event, "type", None) if not isinstance(stream_event, dict) else stream_event.get("type")
+                        
+                        if event_type == "output_text.delta":
+                            chunk = getattr(stream_event, "delta", "") if not isinstance(stream_event, dict) else stream_event.get("delta", "")
                             if chunk:
                                 output_msg += chunk
                                 yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
-                        elif stream_event.type == "response.output_item.done":
+                        elif event_type == "response.output_item.done":
                             # We monkey patched custom_outputs onto the done event in model.py
                             if hasattr(stream_event, "custom_outputs"):
                                 tool_calls_executed = stream_event.custom_outputs.get("tool_calls", [])
