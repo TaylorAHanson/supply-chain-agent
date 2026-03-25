@@ -50,6 +50,7 @@ async def chat(request: ChatRequest):
         
         session_history[request.session_id].append({"role": "user", "content": request.query})
         
+        tool_calls_executed = []
         if LOCAL_MODE:
             print("Running LangGraph agent in LOCAL_MODE...")
             from backend.agent.model import SupplyChainLangGraphAgent
@@ -73,6 +74,12 @@ async def chat(request: ChatRequest):
                     output_msg = first_item.text
                 elif isinstance(first_item, dict):
                     output_msg = first_item.get("text", str(output_msg))
+                    
+            if hasattr(response, 'custom_outputs') and response.custom_outputs:
+                tool_calls_executed = response.custom_outputs.get("tool_calls", [])
+            elif isinstance(response, dict) and "custom_outputs" in response:
+                tool_calls_executed = response["custom_outputs"].get("tool_calls", [])
+                
         else:
             # Call the hosted agent endpoint
             try:
@@ -93,6 +100,16 @@ async def chat(request: ChatRequest):
                 else:
                     output_msg = "No content in response from agent."
                     
+                # Try to extract custom_outputs from the response
+                if hasattr(response, 'custom_outputs') and response.custom_outputs:
+                    tool_calls_executed = response.custom_outputs.get("tool_calls", [])
+                elif hasattr(response, 'as_dict'):
+                    resp_dict = response.as_dict()
+                    if "custom_outputs" in resp_dict:
+                        tool_calls_executed = resp_dict["custom_outputs"].get("tool_calls", [])
+                elif isinstance(response, dict) and "custom_outputs" in response:
+                    tool_calls_executed = response["custom_outputs"].get("tool_calls", [])
+                    
             except Exception as endpoint_err:
                 print(f"DEBUG: Endpoint query failed: {endpoint_err}")
                 raise endpoint_err
@@ -102,7 +119,7 @@ async def chat(request: ChatRequest):
         
         return ChatResponse(
             message=str(output_msg),
-            tool_calls=[] # Tool executions are now fully handled inside the LangGraph endpoint
+            tool_calls=tool_calls_executed
         )
         
     except Exception as e:

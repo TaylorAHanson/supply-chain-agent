@@ -62,16 +62,29 @@ class SupplyChainLangGraphAgent(mlflow.pyfunc.ResponsesAgent):
         
         # Convert incoming messages to LangGraph format
         messages = self.prep_msgs_for_llm([i.model_dump() for i in request.input])
+        input_len = len(messages)
         
         # Run the agent (LangGraph handles the Thought/Action/Observation loop)
         result = self.agent.invoke({"messages": messages})
         
+        # Extract the new messages generated during this turn
+        new_messages = result["messages"][input_len:]
+        
+        tool_calls_executed = []
+        for msg in new_messages:
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    tool_calls_executed.append({"tool_name": tc.get("name", "unknown"), "status": "executed inside agent"})
+        
         # Extract the final message
         final_message = result["messages"][-1].content
         
-        # Return standard MLflow ResponsesAgentResponse
+        # Return standard MLflow ResponsesAgentResponse with custom outputs
         output_item = self.create_text_output_item(text=final_message, id=str(uuid.uuid4()))
-        return mlflow.types.responses.ResponsesAgentResponse(output=[output_item])
+        return mlflow.types.responses.ResponsesAgentResponse(
+            output=[output_item],
+            custom_outputs={"tool_calls": tool_calls_executed}
+        )
 
 def log_agent_model():
     """

@@ -228,7 +228,6 @@ function App() {
               onChange={(e) => setInput(e.target.value)}
               placeholder="Ask anything..."
               className="flex-1 rounded border border-gray-300 px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent text-gray-800"
-              disabled={isLoading}
             />
             <button
               type="submit"
