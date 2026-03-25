@@ -86,26 +86,65 @@ class SupplyChainLangGraphAgent(mlflow.pyfunc.ResponsesAgent):
         aggregated_stream = ""
         
         # Stream events from LangGraph
-        for event in self.agent.stream({"messages": messages}, stream_mode="messages"):
+        config = {"configurable": {"thread_id": "default_thread"}}
+        if hasattr(request, "custom_inputs") and request.custom_inputs:
+            config = {"configurable": {"thread_id": request.custom_inputs.get("session_id", "default_thread")}}
+        
+        for event in self.agent.stream({"messages": messages}, stream_mode="messages", config=config):
             msg = event[0]
             
-            # If the LLM is streaming chunks of the final response
-            if hasattr(msg, "content") and isinstance(msg.content, str) and msg.content:
-                chunk = msg.content.replace(aggregated_stream, "") # Get only the new part if it's aggregating
-                if chunk:
-                    aggregated_stream += chunk
+            chunk = ""
+            if hasattr(msg, "content"):
+                if isinstance(msg.content, str):
+                    chunk = msg.content
+                elif isinstance(msg.content, list) and len(msg.content) > 0:
+                    chunk_dict = msg.content[0]
+                    if isinstance(chunk_dict, dict) and "text" in chunk_dict:
+                        chunk = chunk_dict["text"]
+                    elif isinstance(chunk_dict, str):
+                        chunk = chunk_dict
+                
+            # Check for AIMessageChunk directly as fallback if content attr parsing missed it
+            if not chunk and type(msg).__name__ == "AIMessageChunk":
+                if hasattr(msg, "content"):
+                    if isinstance(msg.content, str):
+                        chunk = msg.content
+                    elif isinstance(msg.content, list) and len(msg.content) > 0:
+                        chunk_dict = msg.content[0]
+                        if isinstance(chunk_dict, dict) and "text" in chunk_dict:
+                            chunk = chunk_dict["text"]
+                        elif isinstance(chunk_dict, str):
+                            chunk = chunk_dict
+                            
+            if chunk:
+                # In streaming mode with AIMessageChunk, LangGraph yields the raw deltas natively.
+                if chunk and chunk.strip() != "":
                     yield self.create_text_delta(delta=chunk, item_id=item_id)
+                    aggregated_stream += chunk
+                elif chunk in [" ", "\n", "\t"]:
+                    yield self.create_text_delta(delta=chunk, item_id=item_id)
+                    aggregated_stream += chunk
                     
         # Extract tool calls from the final state to return as custom outputs
-        final_state = self.agent.get_state({"messages": messages})
         tool_calls_executed = []
-        if final_state and hasattr(final_state, "values") and "messages" in final_state.values:
-            new_messages = final_state.values["messages"][input_len:]
-            for m in new_messages:
-                if hasattr(m, "tool_calls") and m.tool_calls:
-                    for tc in m.tool_calls:
-                        tool_calls_executed.append({"tool_name": tc.get("name", "unknown"), "status": "executed inside agent"})
+        try:
+            final_state = self.agent.get_state(config)
+            if final_state and hasattr(final_state, "values") and "messages" in final_state.values:
+                new_messages = final_state.values["messages"][input_len:]
+                for m in new_messages:
+                    if hasattr(m, "tool_calls") and m.tool_calls:
+                        for tc in m.tool_calls:
+                            tool_name = tc.get("name", "unknown") if isinstance(tc, dict) else getattr(tc, "name", "unknown")
+                            if tool_name and tool_name.strip() != "":
+                                tool_calls_executed.append({"tool_name": tool_name, "status": "executed inside agent"})
+        except Exception:
+            pass # State might not be available without a checkpointer
                         
+        # Ensure we always yield at least ONE event if nothing was yielded so we don't get a 404 or hung stream
+        if not aggregated_stream:
+            # Send an empty string since yielding literal spaces might cause that weird white box
+            pass
+            
         # Yield the custom outputs event (this is a bit of a hack since StreamEvent doesn't natively have custom_outputs, 
         # but we can attach it to the final done event or yield a dummy event)
         done_event = mlflow.types.responses.ResponsesAgentStreamEvent(

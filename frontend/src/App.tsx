@@ -89,19 +89,23 @@ function App() {
                   if (data.type === 'chunk') {
                     setMessages(prev => {
                       const newMessages = [...prev];
-                      const lastMessage = newMessages[newMessages.length - 1];
+                      const lastMessageIndex = newMessages.length - 1;
+                      const lastMessage = { ...newMessages[lastMessageIndex] };
                       if (lastMessage.role === 'assistant') {
                         lastMessage.content += data.content;
                       }
+                      newMessages[lastMessageIndex] = lastMessage;
                       return newMessages;
                     });
                   } else if (data.type === 'tool_calls') {
                     setMessages(prev => {
                       const newMessages = [...prev];
-                      const lastMessage = newMessages[newMessages.length - 1];
+                      const lastMessageIndex = newMessages.length - 1;
+                      const lastMessage = { ...newMessages[lastMessageIndex] };
                       if (lastMessage.role === 'assistant') {
                         lastMessage.tool_calls = data.content;
                       }
+                      newMessages[lastMessageIndex] = lastMessage;
                       return newMessages;
                     });
                   }

@@ -76,7 +76,7 @@ async def chat(request: ChatRequest):
                         # The type could be accessible via attribute or dict key depending on MLflow version
                         event_type = getattr(stream_event, "type", None) if not isinstance(stream_event, dict) else stream_event.get("type")
                         
-                        if event_type == "output_text.delta":
+                        if event_type in ["response.output_text.delta", "output_text.delta"]:
                             chunk = getattr(stream_event, "delta", "") if not isinstance(stream_event, dict) else stream_event.get("delta", "")
                             if chunk:
                                 output_msg += chunk
