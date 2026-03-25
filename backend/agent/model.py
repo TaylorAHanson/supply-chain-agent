@@ -36,9 +36,18 @@ class SupplyChainLangGraphAgent(mlflow.pyfunc.ResponsesAgent):
         )
         
         # Build System Prompt
-        prompt_path = os.path.join(os.path.dirname(__file__), "prompt.md")
-        with open(prompt_path, "r") as f:
-            system_prompt = f.read()
+        try:
+            # When running in MLflow Model Serving, the context object provides the path
+            if context and hasattr(context, "artifacts") and "prompt" in context.artifacts:
+                prompt_path = context.artifacts["prompt"]
+            else:
+                prompt_path = os.path.join(os.path.dirname(__file__), "prompt.md")
+                
+            with open(prompt_path, "r") as f:
+                system_prompt = f.read()
+        except FileNotFoundError:
+            # Fallback if file isn't bundled correctly
+            system_prompt = "You are a helpful supply chain AI agent."
             
         system_prompt += discover_skills()
         
@@ -186,10 +195,20 @@ def log_agent_model():
     """
     # MLflow ResponsesAgent handles signature inference automatically
     with mlflow.start_run() as run:
-        # We specify our custom wrapper class
+        # Define artifacts that the model depends on (like prompt files)
+        import os
+        backend_dir = os.path.dirname(os.path.dirname(__file__))
+        prompt_path = os.path.join(backend_dir, "agent", "prompt.md")
+        
+        artifacts = {
+            "prompt": prompt_path
+        }
+        
+        # We specify our custom wrapper class via code-based logging to avoid serialization issues
         model_info = mlflow.pyfunc.log_model(
             artifact_path="agent",
-            python_model=SupplyChainLangGraphAgent(),
+            python_model="backend/agent/model.py",
+            artifacts=artifacts,
             registered_model_name=MODEL_NAME,
             pip_requirements=[
                 "mlflow==3.10.1", 
@@ -208,3 +227,6 @@ def log_agent_model():
 
 if __name__ == "__main__":
     pass
+
+# For code-based logging in Databricks AI Framework
+mlflow.models.set_model(SupplyChainLangGraphAgent())

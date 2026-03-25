@@ -99,46 +99,91 @@ async def chat(request: ChatRequest):
             return StreamingResponse(event_generator(), media_type="text/event-stream")
                 
         else:
-            # Call the hosted agent endpoint
-            try:
-                # The ResponsesAgent signature expects "messages"
-                response = w.serving_endpoints.query(
-                    name=AGENT_ENDPOINT_NAME,
-                    inputs={"messages": session_history[request.session_id]}
-                )
+            # Call the hosted agent endpoint using streaming
+            import json
+            import httpx
+            from fastapi.responses import StreamingResponse
+            
+            # Construct the endpoint URL
+            host = w.config.host
+            
+            # Authenticate properly (handles OAuth, PATs, etc)
+            auth_headers = w.config.authenticate()
+            if isinstance(auth_headers, dict) and "Authorization" in auth_headers:
+                token = auth_headers["Authorization"].replace("Bearer ", "")
+            else:
+                token = w.config.token
                 
-                # Model Serving for ResponsesAgent returns the standard ChatCompletion-like schema
-                if hasattr(response, 'choices') and len(response.choices) > 0:
-                    output_msg = response.choices[0].message.content
-                elif hasattr(response, 'predictions') and len(response.predictions) > 0:
-                    # Fallback if wrapping slightly differs
-                    output_msg = response.predictions[0]
-                    if isinstance(output_msg, dict) and "content" in output_msg:
-                        output_msg = output_msg["content"]
-                else:
-                    output_msg = "No content in response from agent."
-                    
-                # Try to extract custom_outputs from the response
-                if hasattr(response, 'custom_outputs') and response.custom_outputs:
-                    tool_calls_executed = response.custom_outputs.get("tool_calls", [])
-                elif hasattr(response, 'as_dict'):
-                    resp_dict = response.as_dict()
-                    if "custom_outputs" in resp_dict:
-                        tool_calls_executed = resp_dict["custom_outputs"].get("tool_calls", [])
-                elif isinstance(response, dict) and "custom_outputs" in response:
-                    tool_calls_executed = response["custom_outputs"].get("tool_calls", [])
-                    
-            except Exception as endpoint_err:
-                print(f"DEBUG: Endpoint query failed: {endpoint_err}")
-                raise endpoint_err
+            # Use the OpenAI-compatible chat/completions endpoint for ResponsesAgent
+            endpoint_url = f"{host}/serving-endpoints/{AGENT_ENDPOINT_NAME}/invocations"
+            
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "input": session_history[request.session_id],
+                "stream": True,
+                "custom_inputs": {"session_id": request.session_id}
+            }
+            
+            async def remote_event_generator():
+                nonlocal tool_calls_executed
+                output_msg = ""
                 
-        # Normal response received
-        session_history[request.session_id].append({"role": "assistant", "content": str(output_msg)})
-        
-        return ChatResponse(
-            message=str(output_msg),
-            tool_calls=tool_calls_executed
-        )
+                try:
+                    async with httpx.AsyncClient() as client:
+                        async with client.stream("POST", endpoint_url, headers=headers, json=payload, timeout=60.0) as response:
+                            if response.status_code != 200:
+                                error_text = await response.aread()
+                                print(f"DEBUG: Endpoint returned {response.status_code}: {error_text}")
+                                yield f"data: {json.dumps({'type': 'error', 'content': f'Endpoint returned {response.status_code}'})}\n\n"
+                                return
+                                
+                            async for line in response.aiter_lines():
+                                if not line:
+                                    continue
+                                    
+                                if line.startswith("data: "):
+                                    data_str = line[6:]
+                                    if data_str == "[DONE]":
+                                        break
+                                        
+                                    try:
+                                        data = json.loads(data_str)
+                                        
+                                        event_type = data.get("type", "")
+                                        
+                                        # Handle MLflow ResponsesAgent chunks
+                                        if event_type in ["response.output_text.delta", "output_text.delta"]:
+                                            chunk = data.get("delta", "")
+                                            if chunk:
+                                                output_msg += chunk
+                                                yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
+                                                
+                                        # Also look for custom_outputs if the Databricks backend sends them in the stream
+                                        if "custom_outputs" in data or event_type == "response.output_item.done":
+                                            custom_outs = data.get("custom_outputs", {})
+                                            tool_calls = custom_outs.get("tool_calls", [])
+                                            if tool_calls:
+                                                tool_calls_executed = tool_calls
+                                                yield f"data: {json.dumps({'type': 'tool_calls', 'content': tool_calls_executed})}\n\n"
+                                                
+                                    except json.JSONDecodeError:
+                                        pass
+                                        
+                except Exception as stream_err:
+                    print(f"DEBUG: Remote streaming error: {stream_err}")
+                    import traceback
+                    traceback.print_exc()
+                    yield f"data: {json.dumps({'type': 'error', 'content': str(stream_err)})}\n\n"
+                finally:
+                    # Normal response received, break loop
+                    session_history[request.session_id].append({"role": "assistant", "content": output_msg})
+                    yield "data: [DONE]\n\n"
+                    
+            return StreamingResponse(remote_event_generator(), media_type="text/event-stream")
         
     except Exception as e:
         error_msg = str(e)

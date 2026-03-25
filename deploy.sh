@@ -18,7 +18,7 @@ echo "🚀 Starting Deployment Process..."
 export DATABRICKS_PROFILE=${DATABRICKS_PROFILE:-"myenv"}
 export CATALOG_SCHEMA=${CATALOG_SCHEMA:-"taylor_hanson_build_catalog.supply_chain_schema"}
 export MODEL_NAME=${MODEL_NAME:-"${CATALOG_SCHEMA}.agent_v1"}
-export AGENT_ENDPOINT_NAME=${AGENT_ENDPOINT_NAME:-"supply_chain_agent_endpoint"}
+export AGENT_ENDPOINT_NAME=${AGENT_ENDPOINT_NAME:-"supply_chain_agent_v2_endpoint"}
 export LLM_MODEL_NAME=${LLM_MODEL_NAME:-"databricks-claude-3-7-sonnet"}
 
 echo "----------------------------------------"
@@ -45,6 +45,7 @@ cd ..
 
 echo "🚀 Logging & Deploying Agent to Databricks Model Serving..."
 # This script registers the MLflow model to UC and creates/updates the serving endpoint
+export PYTHONPATH=.
 python scripts/deploy_agent.py
 
 echo "✅ Deployment initiated!"
