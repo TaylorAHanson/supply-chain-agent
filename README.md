@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Stack** | Databricks Agent Framework (Mosaic AI), FastAPI, React, Unity Catalog (UC), FastMCP |
+| **Stack** | Databricks AI Framework (`ResponsesAgent`, `LangGraph`), FastAPI, React, Unity Catalog (UC) |
 | **Status** | Active Development |
 
 ## Table of contents
@@ -24,7 +24,7 @@
 
 ## 1. Executive summary
 
-An autonomous **Supply Chain Agent** hosted as a **Custom Agent** in the Databricks workspace. It uses Unity Catalog for tool governance and FastAPI for core orchestration. The agent assists with **inventory management**, **purchase order (PO) generation**, and **external system integrations** (like ERP checks and Slack notifications).
+An autonomous **Supply Chain Agent** hosted as a **Custom Agent** in the Databricks workspace. It uses the Databricks AI Framework (specifically the `ResponsesAgent` wrapper over `LangGraph`) for robust tool orchestration and LLM interaction. The agent assists with **inventory management**, **purchase order (PO) generation**, and **external system integrations** (like ERP checks and Slack notifications).
 
 ---
 
@@ -32,80 +32,76 @@ An autonomous **Supply Chain Agent** hosted as a **Custom Agent** in the Databri
 
 **Goals**
 
-- Governed access to lakehouse data and external systems through UC and explicit tool contracts.
-- Dynamic tool discovery and schema generation (self-documenting tools).
-- A thin FastAPI layer acting as a secure gateway, session manager, and FastMCP router.
-- Observable agent runs (tracing, tool-call audit) suitable for production review.
+- Deep integration with the Databricks AI Framework (`mlflow.pyfunc.ResponsesAgent`).
+- Serverless execution of tools directly within the Model Serving endpoint container using LangChain.
+- Dynamic tool discovery and schema generation.
+- Observable agent runs (tracing, tool-call audit) suitable for production review via AI Gateway Inference Tables.
+- A thin FastAPI layer acting purely as a secure gateway to the deployed agent.
 
 **Non-goals (initial phase)**
 
 - Replacing full ERP workflows end-to-end; the agent assists and proposes, with human approval where required.
-- Building a generic MCP marketplace inside this repo; we integrate specific bridges as needed.
+- Building a complex multi-agent system (we are starting with a single ReAct agent graph).
 
 ---
 
 ## 3. System architecture
 
-The architecture follows an **agentic bridge** pattern with dynamic tool routing:
+The architecture leverages Databricks Model Serving as the core brain and execution environment:
 
 | Layer | Role |
 |--------|------|
 | **Frontend** | React + Tailwind chat UI |
-| **Orchestration** | FastAPI: secure gateway, FastMCP router, and session manager |
-| **Agent** | Databricks Agent Serving endpoint (LLM + dynamically loaded tools) |
-| **Tools (data)** | UC Functions for SQL/Python against the lakehouse |
-| **Tools (external)** | FastMCP bridge for ERP/APIs and other MCP-capable systems |
+| **Orchestration** | FastAPI: secure gateway and session proxy |
+| **Agent** | Databricks Agent Serving endpoint (`ResponsesAgent` + `LangGraph` + `ChatOpenAI` against Foundation Models) |
+| **Tools** | LangChain `@tool` wrapped Python functions executing inside the Serving container |
 
 ### Component diagram
 
 ```mermaid
 graph TD
-    A[React Frontend] -->|REST| B[FastAPI Backend]
-    B -->|Databricks SDK| C[Agent Serving Endpoint]
-    C -->|Dynamic schema loading| D{Tool router}
-    D -->|SQL execution| E[UC Functions]
-    D -->|Yield fastmcp payload| B
-    B -->|Local execution| F[FastMCP Server]
-    E --> G[(Databricks Lakehouse)]
-    F --> H[External ERP / Slack APIs]
+    A[React Frontend] -->|REST /chat| B[FastAPI Proxy]
+    B -->|Databricks SDK query()| C[Databricks Model Serving Endpoint]
+    
+    subgraph "ResponsesAgent Container"
+        C -->|Initialize| D[LangGraph ReAct Agent]
+        D <-->|Thought/Action Loop| E{Tool Router}
+        E -->|Lakehouse Query| F[Unity Catalog Tools]
+        E -->|API Request| G[External API Tools]
+    end
+    
+    F --> H[(Databricks Lakehouse)]
+    G --> I[External ERP / Slack APIs]
 ```
 
 ### Request flow (high level)
 
-1. User sends a message; FastAPI authenticates and forwards the query to the **serving endpoint**.
-2. The agent reasoning loop evaluates the dynamically provided tool schemas.
-3. For **UC tools**, the agent directly executes the SQL functions via the workspace client and processes the result.
-4. For **FastMCP tools**, the agent returns a special payload instructing FastAPI to execute the tool locally.
-5. FastAPI executes the local FastMCP tool and returns the formatted response.
-6. The final response flows back to the UI.
+1. User sends a message via the UI.
+2. FastAPI proxies the session history to the **Databricks Model Serving endpoint**.
+3. Inside the endpoint, the `ResponsesAgent` passes the messages to `LangGraph`.
+4. `LangGraph` orchestrates the Thought -> Action -> Observation loop.
+5. If the LLM requests a tool, `LangGraph` executes the mapped Python function directly inside the serverless container.
+6. Once a final answer is synthesized, the text is returned to FastAPI, which forwards it to the UI.
 
 ---
 
 ## 4. Tooling and skill management
 
-We use a **hybrid, dynamically discovered tooling model** managed by `backend/tools/registry.py`. We also support a **Skills Framework** for cognitive SOPs.
+We use a **dynamic discovery model** managed by `backend/tools/registry.py`. We also support a **Skills Framework** for cognitive SOPs.
 
 ### A. Skills (Cognitive SOPs)
 
 **Use case:** Providing the agent with standard operating procedures on how to analyze data, what policies to follow, or how to chain tools together for a specific business process.
 
 - **Registration:** Add a `.md` file to `backend/skills/` with a YAML frontmatter `description`.
-- **Execution:** The agent reads the description in its system prompt and uses the `read_skill` tool to read the markdown instructions when relevant.
+- **Execution:** The agent reads the description injected into its system prompt and uses the native `read_skill` tool to retrieve the markdown instructions when relevant.
 
-### B. UC Functions (data and logic)
+### B. Python Tools (LangChain)
 
-**Use case:** Any tool that queries the lakehouse.
+**Use case:** Any action the agent needs to take, whether it's querying the lakehouse via the Databricks SDK, or hitting an external ERP API.
 
-- **Registration:** Defined in Python (`backend/tools/uc_tools.py`), schemas are dynamically extracted via inspection, and executed natively via SQL (`main.supply_chain_schema.*`).
-- **Examples:** `get_inventory`, `get_supplier_lead_times`.
-
-### C. FastMCP bridge (external connectivity)
-
-**Use case:** External actions like ERP checks, Slack notifications, or processing uploaded files.
-
-- **Registration:** Defined as individual `.py` files in `backend/tools/mcp/`. The registry automatically tags these as `fastmcp` tools. 
-- **Execution:** Instead of running natively in Databricks, the agent yields a JSON payload telling FastAPI to execute the local FastMCP function, update the conversation history, and allow the agent to synthesize the result.
-- **Examples:** `get_erp_supplier_status`, `notify_slack_channel`, `manage_safety_stock`.
+- **Registration:** Defined as individual `.py` files in `backend/tools/mcp/`. 
+- **Execution:** During model deployment and initialization, `registry.py` discovers these Python functions and wraps them using LangChain's `tool` primitive. They are injected into the LangGraph state machine.
 
 ---
 
@@ -116,59 +112,42 @@ We use a **hybrid, dynamically discovered tooling model** managed by `backend/to
 ```text
 /
 ├── backend/
-│   ├── app.py                 # FastAPI entry point & FastMCP payload router
+│   ├── app.py                 # FastAPI proxy server
 │   ├── agent/
-│   │   ├── model.py           # Custom PyFunc Agent logic (MLflow-logged)
+│   │   ├── model.py           # ResponsesAgent & LangGraph wrapper logic
 │   │   ├── config.py          # Workspace configurations
 │   │   └── prompt.md          # Core agent personality and system instructions
 │   ├── skills/                # Markdown SOPs (e.g. analyze_safety_stock.md)
 │   └── tools/
-│       ├── mcp/               # Individual FastMCP tools (e.g. notify_slack.py)
-│       ├── registry.py        # Dynamic tool/skill discovery
-│       └── uc_tools.py        # UC tool schema definitions
+│       ├── mcp/               # Individual Python tools (e.g. notify_slack.py)
+│       └── registry.py        # Dynamic tool/skill discovery and LangChain wrapping
 ├── frontend/                  # React + Tailwind UI
 │   └── src/
 ├── scripts/
-│   ├── setup_uc.py            # Programmatic UC schema/table/function provisioning
-│   ├── seed_data.py           # Random data generator for inventory/suppliers/POs
 │   └── deploy_agent.py        # MLflow model registration and deployment
-├── start.sh                   # Cross-platform local launch script
-└── pyproject.toml             # Python dependencies
+├── deploy.sh                  # Core deployment script
+└── requirements.txt           # Python dependencies
 ```
 
-### Backend: FastAPI orchestration
+### Agent logic (`model.py`)
 
-FastAPI acts as a proxy and FastMCP router. It manages an in-memory `session_history` dictionary to retain conversation context. If the agent returns a `fastmcp_tool_call` JSON payload, FastAPI executes it locally and feeds the result back into the agent loop.
-
-```python
-# backend/app.py logic snippet
-if parsed_msg.get("type") == "fastmcp_tool_call":
-    tool_name = parsed_msg.get("tool")
-    args = parsed_msg.get("arguments", {})
-    # Dynamically load and execute the local tool from backend/tools/mcp/
-    module = importlib.import_module(f"backend.tools.mcp.{tool_name}")
-    result = getattr(module, tool_name)(**args)
-    # Append result to history and continue the agent loop
-    session_history[session_id].append({"role": "tool", "content": result})
-    continue
-```
-
-### Agent logic
-
-The agent uses a custom `mlflow.pyfunc` class that dynamically discovers tools at runtime.
+The agent uses the Databricks `ResponsesAgent` wrapper around a `LangGraph` prebuilt ReAct agent.
 
 ```python
-# backend/agent/model.py logic snippet
-from backend.tools.registry import discover_tools
+from langgraph.prebuilt import create_react_agent
+from backend.tools.registry import get_langchain_tools
 
-class SupplyChainPyFuncAgent(mlflow.pyfunc.PythonModel):
-    def predict(self, context, model_input):
-        tool_schemas, tool_routing = discover_tools()
-        # ... queries the LLM with dynamic tools
-        if execution_type == "uc":
-            res = self._run_sql(f"SELECT * FROM {catalog}.{func_name}(...)")
-        elif execution_type == "fastmcp":
-            return [json.dumps({"type": "fastmcp_tool_call", "tool": func_name, "arguments": args})]
+class SupplyChainLangGraphAgent(mlflow.pyfunc.ResponsesAgent):
+    def load_context(self, context):
+        # Configure LLM to point to Foundation Models
+        llm = ChatOpenAI(...)
+        tools = get_langchain_tools()
+        self.agent = create_react_agent(llm, tools, state_modifier=system_prompt)
+
+    def predict(self, request):
+        # LangGraph handles the entire multi-turn tool execution loop
+        result = self.agent.invoke({"messages": formatted_msgs})
+        return mlflow.types.responses.ResponsesAgentResponse(output=[...])
 ```
 
 ---
@@ -211,15 +190,12 @@ python scripts/seed_data.py
 
 | Concern | Approach |
 |---------|----------|
-| **Identity** | Local auth via `DATABRICKS_PROFILE` for FastAPI → Databricks. |
-| **Traceability** | MLflow Tracing and explicit FastMCP logging in the UI. |
-| **External calls** | MCP calls are executed in the secure FastAPI layer, not directly from the workspace container. |
+| **Identity** | Local auth via `DATABRICKS_PROFILE` for FastAPI → Databricks. Inside Model Serving, tools execute using the Endpoint's configured Service Principal. |
+| **Traceability** | `ResponsesAgent` natively integrates with MLflow Tracing and AI Gateway Inference Tables. |
 
 ---
 
 ## 8. Data model
-
-The backend provisions a Unity Catalog schema (`taylor_hanson_build_catalog.supply_chain_schema`) seeded with randomized mock data via `scripts/seed_data.py`.
 
 ### Core Unity Catalog tables
 
@@ -241,6 +217,7 @@ The FastAPI layer exposes a thin REST API to the React frontend.
 
 ```json
 {
+  "session_id": "12345",
   "query": "Do we need to reorder SKU-555?"
 }
 ```
@@ -250,14 +227,10 @@ The FastAPI layer exposes a thin REST API to the React frontend.
 ```json
 {
   "message": "Yes, SKU-555 is below the reorder point...",
-  "tool_calls": [
-    {
-      "tool_name": "get_inventory",
-      "status": "executed via UC SQL"
-    }
-  ]
+  "tool_calls": []
 }
 ```
+*(Note: Because the tool execution loop now happens entirely inside the Databricks Serving Endpoint, the frontend only receives the final synthesized text).*
 
 ---
 
@@ -269,21 +242,26 @@ sequenceDiagram
     participant UI as React Frontend
     participant API as FastAPI Backend
     participant Agent as Databricks Agent (Serving)
-    participant UC as Unity Catalog
-    participant MCP as FastMCP (Local API)
+    participant Lake as Unity Catalog
+    participant Ext as External APIs
 
     User->>UI: "Check stock for SKU-555 and notify Slack"
     UI->>API: POST /chat {query: "..."}
-    API->>Agent: Query endpoint
-    Agent->>UC: Execute SELECT * FROM get_inventory('SKU-555')
-    UC-->>Agent: {stock: 15, reorder_point: 50}
+    API->>Agent: Send Full Conversation History
     
-    Agent-->>API: yield {type: "fastmcp_tool_call", tool: "notify_slack"}
-    API->>MCP: call notify_slack_channel()
-    MCP-->>API: Success response
+    rect rgb(200, 220, 240)
+        Note over Agent, Ext: Internal LangGraph Loop
+        Agent->>Agent: Thought: I need to check stock
+        Agent->>Lake: Execute `query_lakehouse` tool
+        Lake-->>Agent: {stock: 15, reorder_point: 50}
+        Agent->>Agent: Thought: Stock is low, I need to notify Slack
+        Agent->>Ext: Execute `notify_slack_channel` tool
+        Ext-->>Agent: Success
+        Agent->>Agent: Synthesize final answer
+    end
     
+    Agent-->>API: "Stock is low. Slack notified."
     API-->>UI: "Stock is low. Slack notified."
-    UI-->>User: (Displays message & tool badges)
 ```
 
 ---
@@ -294,9 +272,10 @@ sequenceDiagram
 |-------|-------|--------|------------------|
 | **Phase 1 (MVP)** | Read-only Lakehouse | ✅ Done | FastAPI + React. Read-only UC tools. Agent deployment. Data seeding. |
 | **Phase 2** | Write-back & Tooling | ✅ Done | Dynamic tool registry. `draft_purchase_order` tool. |
-| **Phase 3** | External Integrations | ✅ Done | FastMCP backend routing for `notify_slack_channel` and `get_erp_supplier_status`. |
+| **Phase 3** | External Integrations | ✅ Done | Tools for `notify_slack_channel` and `get_erp_supplier_status`. |
 | **Phase 4** | Advanced Capabilities | ✅ Done | File uploads (CSV/XLSX processing), `manage_safety_stock` tool. |
 | **Phase 5** | Cognitive SOPs | ✅ Done | Dynamic Skill framework (`backend/skills/`) for markdown-based agent procedures. |
+| **Phase 6** | Framework Alignment | ✅ Done | Refactored to native Databricks AI Framework (`ResponsesAgent` + `LangGraph`). |
 
 ---
 
@@ -304,10 +283,9 @@ sequenceDiagram
 
 **Suggested next steps**
 
-1. Set up evaluation notebooks for Golden questions and tracing accuracy.
-2. Add more complex UC functions that require cross-table joins.
-3. Add a dedicated vector search tool for retrieving external context.
+1. Set up Databricks Agent Evaluation notebooks to run Judges against the Inference Tables.
+2. Add a dedicated Vector Search retriever tool mapped via `mlflow.models.set_retriever_schema` for semantic search.
 
 ---
 
-*Document version: 0.3.0 — Updated with Skills framework, file uploads, and history persistence.*
+*Document version: 0.4.0 — Refactored to Databricks AI Framework, ResponsesAgent, and LangGraph.*
