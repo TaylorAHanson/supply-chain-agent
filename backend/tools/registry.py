@@ -72,6 +72,33 @@ def discover_tools():
             
     return schemas, execution_routing
 
+def get_langchain_tools():
+    """
+    Discovers all tools dynamically and wraps them as LangChain tools.
+    """
+    from langchain_core.tools import tool
+    import backend.tools.uc_tools as uc_tools
+    import pkgutil
+    import importlib
+    import backend.tools.mcp
+    
+    langchain_tools = []
+    
+    # FastMCP Tools
+    for _, module_name, _ in pkgutil.iter_modules(backend.tools.mcp.__path__):
+        if module_name.startswith("_"): continue
+        mod = importlib.import_module(f"backend.tools.mcp.{module_name}")
+        if hasattr(mod, module_name):
+            func = getattr(mod, module_name)
+            if inspect.isfunction(func):
+                langchain_tools.append(tool(func))
+                
+    # Unity Catalog Tools (We skip them here if we just want to focus on Python ones, 
+    # but we can wrap them in a similar executor if needed). 
+    # For now, we will just pass Python fastmcp tools to LangGraph.
+    
+    return langchain_tools
+
 def discover_skills():
     """
     Discovers all skills dynamically from the backend/skills/ directory.
@@ -111,4 +138,3 @@ def discover_skills():
         
     skills_str = "\n".join(skills)
     return f"\n\nYou have access to the following skills. If a user asks about these topics, use the `read_skill` tool to read the instructions before answering:\n{skills_str}"
-
