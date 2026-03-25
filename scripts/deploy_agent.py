@@ -7,23 +7,30 @@ from backend.agent.model import log_agent_model
 
 def main():
     import os
-    profile = os.environ.get("DATABRICKS_PROFILE", "myenv")
     
-    # Force authentication using the configured profile for agents.deploy
-    w = WorkspaceClient(profile=profile)
-    auth_headers = w.config.authenticate()
-    os.environ["DATABRICKS_HOST"] = w.config.host
-    if isinstance(auth_headers, dict) and "Authorization" in auth_headers:
-        os.environ["DATABRICKS_TOKEN"] = auth_headers["Authorization"].replace("Bearer ", "")
-    elif w.config.token:
-        os.environ["DATABRICKS_TOKEN"] = w.config.token
+    # Detect if we are running inside a Databricks cluster/notebook
+    is_in_databricks = "DATABRICKS_RUNTIME_VERSION" in os.environ
+
+    if is_in_databricks:
+        print("Running inside Databricks Runtime. Using default workspace authentication.")
+        w = WorkspaceClient()
+        mlflow.set_registry_uri("databricks-uc")
+    else:
+        profile = os.environ.get("DATABRICKS_PROFILE", "myenv")
+        print(f"Running locally. Using profile: {profile}")
+        # Force authentication using the configured profile
+        w = WorkspaceClient(profile=profile)
+        auth_headers = w.config.authenticate()
+        os.environ["DATABRICKS_HOST"] = w.config.host
+        if isinstance(auth_headers, dict) and "Authorization" in auth_headers:
+            os.environ["DATABRICKS_TOKEN"] = auth_headers["Authorization"].replace("Bearer ", "")
+        elif w.config.token:
+            os.environ["DATABRICKS_TOKEN"] = w.config.token
+            
+        mlflow.set_tracking_uri(f"databricks://{profile}")
+        mlflow.set_registry_uri(f"databricks-uc://{profile}")
 
     print(f"Logging agent model to UC: {MODEL_NAME}")
-    
-    # 1. Log the model
-    # Note: MLflow requires the registry_uri to be set to databricks-uc
-    mlflow.set_tracking_uri(f"databricks://{profile}")
-    mlflow.set_registry_uri(f"databricks-uc://{profile}")
     
     # Configure MLflow HTTP timeout (prevent 5 minute hangs)
     os.environ["MLFLOW_HTTP_REQUEST_TIMEOUT"] = "60"
@@ -39,15 +46,32 @@ def main():
     import json
     import subprocess
     # Find user email via databricks CLI to use as experiment path
-    user_email = subprocess.check_output(
-        ["databricks", "current-user", "me", "--profile", profile], 
-        text=True
-    ).strip()
-    try:
-        user_data = json.loads(user_email)
-        user_email = user_data.get("userName", "unknown@example.com")
-    except:
-        pass
+    import tempfile
+    
+    if is_in_databricks:
+        # In a notebook, use a simpler path based on current user
+        try:
+            from pyspark.sql import SparkSession
+            spark = SparkSession.builder.getOrCreate()
+            user_email = spark.conf.get("spark.databricks.workspaceUrl", "unknown@example.com") 
+            # Better fallback for notebook username
+            try:
+                import IPython
+                user_email = IPython.get_ipython().user_ns.get("dbutils").notebook.entry_point.getDbutils().notebook().getContext().tags().get("user").get()
+            except:
+                pass
+        except:
+            user_email = "databricks_user"
+    else:
+        try:
+            user_email = subprocess.check_output(
+                ["databricks", "current-user", "me", "--profile", profile], 
+                text=True
+            ).strip()
+            user_data = json.loads(user_email)
+            user_email = user_data.get("userName", "unknown@example.com")
+        except:
+            user_email = "unknown@example.com"
     
     experiment_path = f"/Users/{user_email}/supply_chain_agent"
     print(f"Setting MLflow experiment to {experiment_path}")
