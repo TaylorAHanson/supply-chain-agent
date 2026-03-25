@@ -86,13 +86,13 @@ def log_agent_model():
             registered_model_name=MODEL_NAME,
             pip_requirements=[
                 "mlflow==3.10.1", 
-                "pandas==2.2.0", 
+                "pandas==2.3.3", 
                 "databricks-sdk==0.102.0", 
-                "openai==1.14.3",
-                "langchain==0.1.16",
-                "langchain-core==0.1.45",
-                "langchain-openai==0.1.3",
-                "langgraph==0.0.39"
+                "openai>=1.14.3",
+                "langchain>=0.2.0",
+                "langchain-core>=0.2.0",
+                "langchain-openai>=0.1.0",
+                "langgraph>=0.1.0"
             ],
             code_paths=["backend"]
         )
