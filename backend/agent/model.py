@@ -64,10 +64,19 @@ class SupplyChainLangGraphAgent(mlflow.pyfunc.ResponsesAgent):
         output_items = []
         custom_outputs = {}
         for stream_event in self.predict_stream(request):
-            if stream_event.type == "response.output_item.done":
-                output_items.append(stream_event.item)
-            elif stream_event.type == "custom_outputs":
-                custom_outputs = getattr(stream_event, "custom_outputs", {})
+            event_type = getattr(stream_event, "type", None) if not isinstance(stream_event, dict) else stream_event.get("type")
+            if event_type in ["response.output_item.done", "output_item.done"]:
+                item = getattr(stream_event, "item", None) if not isinstance(stream_event, dict) else stream_event.get("item")
+                if item:
+                    output_items.append(item)
+                
+                # Check if custom_outputs was attached directly to the done event (monkey patch)
+                if hasattr(stream_event, "custom_outputs"):
+                    custom_outputs = getattr(stream_event, "custom_outputs", {})
+                elif isinstance(stream_event, dict) and "custom_outputs" in stream_event:
+                    custom_outputs = stream_event.get("custom_outputs", {})
+            elif event_type == "custom_outputs":
+                custom_outputs = getattr(stream_event, "custom_outputs", {}) if not isinstance(stream_event, dict) else stream_event.get("custom_outputs", {})
                 
         return mlflow.types.responses.ResponsesAgentResponse(
             output=output_items,
@@ -93,6 +102,10 @@ class SupplyChainLangGraphAgent(mlflow.pyfunc.ResponsesAgent):
         for event in self.agent.stream({"messages": messages}, stream_mode="messages", config=config):
             msg = event[0]
             
+            # We ONLY want to stream AI generated text to the user, not tool results or human messages.
+            if type(msg).__name__ not in ["AIMessageChunk", "AIMessage"]:
+                continue
+                
             chunk = ""
             if hasattr(msg, "content"):
                 if isinstance(msg.content, str):
@@ -103,25 +116,30 @@ class SupplyChainLangGraphAgent(mlflow.pyfunc.ResponsesAgent):
                         chunk = chunk_dict["text"]
                     elif isinstance(chunk_dict, str):
                         chunk = chunk_dict
-                
-            # Check for AIMessageChunk directly as fallback if content attr parsing missed it
-            if not chunk and type(msg).__name__ == "AIMessageChunk":
-                if hasattr(msg, "content"):
-                    if isinstance(msg.content, str):
-                        chunk = msg.content
-                    elif isinstance(msg.content, list) and len(msg.content) > 0:
-                        chunk_dict = msg.content[0]
-                        if isinstance(chunk_dict, dict) and "text" in chunk_dict:
-                            chunk = chunk_dict["text"]
-                        elif isinstance(chunk_dict, str):
-                            chunk = chunk_dict
                             
+            # Some tool call messages incorrectly pass the tool content or instructions back to stream
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                continue
+            if hasattr(msg, "tool_call_chunks") and msg.tool_call_chunks:
+                continue
+            if hasattr(msg, "invalid_tool_calls") and msg.invalid_tool_calls:
+                continue
+                
             if chunk:
-                # In streaming mode with AIMessageChunk, LangGraph yields the raw deltas natively.
-                if chunk and chunk.strip() != "":
-                    yield self.create_text_delta(delta=chunk, item_id=item_id)
-                    aggregated_stream += chunk
-                elif chunk in [" ", "\n", "\t"]:
+                # Some implementations stream the *entire* message over and over again with the new character appended
+                if len(chunk) > len(aggregated_stream) and chunk.startswith(aggregated_stream):
+                    new_delta = chunk[len(aggregated_stream):]
+                    if new_delta:
+                        aggregated_stream = chunk
+                        yield self.create_text_delta(delta=new_delta, item_id=item_id)
+                elif chunk == aggregated_stream:
+                    # Duplicate payload, ignore
+                    pass
+                elif len(aggregated_stream) > 0 and aggregated_stream.startswith(chunk):
+                    # Out of order or partial chunk, ignore
+                    pass
+                # Otherwise, it's a standard additive delta
+                else:
                     yield self.create_text_delta(delta=chunk, item_id=item_id)
                     aggregated_stream += chunk
                     
@@ -144,6 +162,12 @@ class SupplyChainLangGraphAgent(mlflow.pyfunc.ResponsesAgent):
         if not aggregated_stream:
             # Send an empty string since yielding literal spaces might cause that weird white box
             pass
+            
+        # We want to filter out any skill leakage that somehow made its way into the final stream
+        # If the LLM just printed out <system_instruction> tags, try to hide them
+        if "<read_skill_result>" in aggregated_stream:
+            import re
+            aggregated_stream = re.sub(r'<read_skill_result>.*?</read_skill_result>', '', aggregated_stream, flags=re.DOTALL)
             
         # Yield the custom outputs event (this is a bit of a hack since StreamEvent doesn't natively have custom_outputs, 
         # but we can attach it to the final done event or yield a dummy event)

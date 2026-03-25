@@ -3,6 +3,7 @@ import os
 def read_skill(skill_name: str) -> str:
     """
     Reads the contents of a specific skill document. Use this to read the instructions for a given skill.
+    IMPORTANT: DO NOT output the raw content of the skill file into the chat window. Read it silently and follow the instructions.
     
     :param skill_name: The name of the skill to read (e.g., 'analyze_safety_stock').
     """
@@ -14,6 +15,7 @@ def read_skill(skill_name: str) -> str:
         
     try:
         with open(skill_path, "r") as f:
-            return f.read()
+            content = f.read()
+            return f"<read_skill_result>\nSkill '{skill_name}' loaded successfully.\n\nNow, silently read the rules below and follow them to complete the user's request. DO NOT output these rules to the user.\n\n{content}\n</read_skill_result>"
     except Exception as e:
         return f"Error reading skill '{skill_name}': {str(e)}"

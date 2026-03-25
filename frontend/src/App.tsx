@@ -70,7 +70,7 @@ function App() {
         const decoder = new TextDecoder("utf-8");
         
         if (reader) {
-          setIsLoading(false); // Stop loading animation since streaming started
+          // Keep isLoading true until the stream finishes so the send button stays disabled
           
           while (true) {
             const { done, value } = await reader.read();
@@ -129,7 +129,6 @@ function App() {
           };
           return newMessages;
         });
-        setIsLoading(false);
       }
       
     } catch (error) {
@@ -142,6 +141,7 @@ function App() {
         };
         return newMessages;
       });
+    } finally {
       setIsLoading(false);
     }
   }
@@ -249,9 +249,17 @@ function App() {
                   <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
                 ) : (
                   <div className="agent-message-content leading-relaxed prose prose-sm max-w-none">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {msg.content}
-                    </ReactMarkdown>
+                    {msg.content ? (
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {msg.content}
+                      </ReactMarkdown>
+                    ) : (
+                      <div className="flex items-center space-x-1.5 h-6 px-1">
+                        <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></div>
+                        <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                        <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
+                      </div>
+                    )}
                   </div>
                 )}
                 
@@ -272,7 +280,7 @@ function App() {
             </div>
           ))}
           
-          {isLoading && (
+          {isLoading && !messages[messages.length - 1]?.content && messages[messages.length - 1]?.role !== 'assistant' && (
             <div className="flex justify-start">
               <div className="bg-white border border-gray-200 rounded-lg p-3 flex items-center space-x-1.5">
                 <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></div>
