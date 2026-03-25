@@ -44,7 +44,7 @@ class SupplyChainLangGraphAgent(mlflow.pyfunc.ResponsesAgent):
         tools = get_langchain_tools()
         
         # Create the LangGraph agent
-        self.agent = create_react_agent(llm, tools, state_modifier=system_prompt)
+        self.agent = create_react_agent(llm, tools, prompt=system_prompt)
 
     def prep_msgs_for_llm(self, messages):
         """Convert MLflow input messages to Langchain format."""

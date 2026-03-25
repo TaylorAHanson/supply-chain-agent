@@ -24,7 +24,11 @@ def test_local():
         if hasattr(output_item, 'content'):
             content = output_item.content
             if isinstance(content, list) and len(content) > 0:
-                print("Text:", content[0].text)
+                first_item = content[0]
+                if hasattr(first_item, 'text'):
+                    print("Text:", first_item.text)
+                elif isinstance(first_item, dict):
+                    print("Text:", first_item.get('text', ''))
             else:
                 print("Text directly:", content)
         elif isinstance(output_item, dict):

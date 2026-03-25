@@ -64,9 +64,15 @@ async def chat(request: ChatRequest):
             )
             
             response = agent.predict(req)
-            output_msg = response.output[0].content
+            output_item = response.output[0]
+            output_msg = output_item.content if hasattr(output_item, 'content') else output_item.get("content", "")
+            
             if isinstance(output_msg, list) and len(output_msg) > 0:
-                 output_msg = output_msg[0].text
+                first_item = output_msg[0]
+                if hasattr(first_item, "text"):
+                    output_msg = first_item.text
+                elif isinstance(first_item, dict):
+                    output_msg = first_item.get("text", str(output_msg))
         else:
             # Call the hosted agent endpoint
             try:
