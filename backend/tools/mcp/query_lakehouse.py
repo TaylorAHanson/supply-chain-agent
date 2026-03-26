@@ -5,8 +5,10 @@ from databricks.sdk import WorkspaceClient
 def query_lakehouse(sql_query: str) -> str:
     """
     Execute a read-only SQL query against the Databricks Lakehouse.
-    Use this tool to answer general questions about the data that aren't covered by specific tools like get_inventory.
-    The agent will execute this query against the configured CATALOG_SCHEMA.
+    Use this tool to answer general questions about the data.
+    IMPORTANT: You MUST use fully qualified table names (e.g., `catalog.schema.table_name`) in your SQL queries, 
+    as the data could be located in various catalogs and schemas. If you do not know the correct catalog and schema, 
+    either ask the user or use `SHOW CATALOGS` and query `system.information_schema.tables` to find the correct data.
     """
     try:
         w = WorkspaceClient(profile=os.getenv("DATABRICKS_PROFILE"))
