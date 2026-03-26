@@ -1,19 +1,12 @@
 import os
 from databricks.sdk import WorkspaceClient
 
-def ask_genie(question: str) -> str:
+def ask_genie(space_id: str, question: str) -> str:
     """
-    Ask a complex data or analytics question to the Databricks Genie Space.
+    Ask a complex data or analytics question to a specific Databricks Genie Space.
     Use this tool when the user asks a question that requires data analysis, aggregations, or querying data that you don't have direct access to via other tools.
+    You must provide the `space_id` of the appropriate Genie Space (use the `list_genies` tool to find it).
     """
-    try:
-        from backend.agent.config import GENIE_SPACE_ID
-    except ImportError:
-        GENIE_SPACE_ID = os.getenv("GENIE_SPACE_ID")
-
-    if not GENIE_SPACE_ID:
-        return "Error: GENIE_SPACE_ID is not configured."
-
     try:
         w = WorkspaceClient(profile=os.getenv("DATABRICKS_PROFILE", "myenv"))
     except Exception as e:
@@ -21,7 +14,7 @@ def ask_genie(question: str) -> str:
         
     try:
         response = w.genie.start_conversation_and_wait(
-            space_id=GENIE_SPACE_ID,
+            space_id=space_id,
             content=question
         )
         # Note: Depending on the SDK version, the exact attribute for the text content might vary slightly.

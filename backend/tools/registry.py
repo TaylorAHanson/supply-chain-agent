@@ -61,14 +61,17 @@ def discover_tools():
     for _, module_name, _ in pkgutil.iter_modules(backend.tools.mcp.__path__):
         if module_name.startswith("_"): continue
         
-        mod = importlib.import_module(f"backend.tools.mcp.{module_name}")
-        
-        # We assume the tool function name matches the filename
-        if hasattr(mod, module_name):
-            func = getattr(mod, module_name)
-            if inspect.isfunction(func):
-                schemas.append(get_openai_tool_schema(func))
-                execution_routing[module_name] = "fastmcp"
+        try:
+            mod = importlib.import_module(f"backend.tools.mcp.{module_name}")
+            
+            # We assume the tool function name matches the filename
+            if hasattr(mod, module_name):
+                func = getattr(mod, module_name)
+                if inspect.isfunction(func):
+                    schemas.append(get_openai_tool_schema(func))
+                    execution_routing[module_name] = "fastmcp"
+        except Exception as e:
+            print(f"Warning: Failed to load tool {module_name}: {e}")
             
     return schemas, execution_routing
 
@@ -87,16 +90,72 @@ def get_langchain_tools():
     # FastMCP Tools
     for _, module_name, _ in pkgutil.iter_modules(backend.tools.mcp.__path__):
         if module_name.startswith("_"): continue
-        mod = importlib.import_module(f"backend.tools.mcp.{module_name}")
-        if hasattr(mod, module_name):
-            func = getattr(mod, module_name)
-            if inspect.isfunction(func):
-                langchain_tools.append(tool(func))
+        try:
+            mod = importlib.import_module(f"backend.tools.mcp.{module_name}")
+            if hasattr(mod, module_name):
+                func = getattr(mod, module_name)
+                if inspect.isfunction(func):
+                    langchain_tools.append(tool(func))
+        except Exception as e:
+            print(f"Warning: Failed to load tool {module_name}: {e}")
                 
-    # Unity Catalog Tools (We skip them here if we just want to focus on Python ones, 
-    # but we can wrap them in a similar executor if needed). 
-    # For now, we will just pass Python fastmcp tools to LangGraph.
+    # Unity Catalog Tools
+    import os
+    import time
+    from databricks.sdk import WorkspaceClient
     
+    def create_uc_executor(func_name, original_func):
+        def wrapper(**kwargs):
+            try:
+                from backend.agent.config import CATALOG_SCHEMA
+            except ImportError:
+                CATALOG_SCHEMA = os.getenv("CATALOG_SCHEMA", "taylor_hanson_build_catalog.supply_chain_schema")
+            
+            try:
+                w = WorkspaceClient(profile=os.getenv("DATABRICKS_PROFILE", "myenv") if not os.environ.get("DATABRICKS_APP_NAME") else None)
+                
+                warehouses = list(w.warehouses.list())
+                wh_id = next((wh.id for wh in warehouses if wh.state.name in ['RUNNING', 'STARTING']), None)
+                if not wh_id and warehouses: wh_id = warehouses[0].id
+                if not wh_id: return "Error: No SQL warehouse found."
+                
+                # Construct SQL to call the UC function
+                args_str = ", ".join([f"'{v}'" if isinstance(v, str) else str(v) for v in kwargs.values()])
+                sql = f"SELECT * FROM {CATALOG_SCHEMA}.{func_name}({args_str})"
+                
+                res = w.statement_execution.execute_statement(statement=sql, warehouse_id=wh_id)
+                
+                while True:
+                    status = w.statement_execution.get_statement(res.statement_id).status
+                    if status.state.value in ["SUCCEEDED", "FAILED", "CANCELED", "CLOSED"]: break
+                    time.sleep(1)
+                    
+                if status.state.value == "SUCCEEDED":
+                    result = w.statement_execution.get_statement(res.statement_id)
+                    if result.result and result.result.data_array:
+                        columns = [col.name for col in result.manifest.schema.columns] if result.manifest and result.manifest.schema else []
+                        output = f"Columns: {columns}\nData:\n"
+                        for row in result.result.data_array[:100]:
+                            output += f"{row}\n"
+                        return output
+                    return f"Function executed successfully but returned no data."
+                return f"SQL Failed: {status.error.message}"
+            except Exception as e:
+                return f"Error executing UC function: {str(e)}"
+                
+        # Copy metadata from original function to wrapper so LangChain tool creation sees the right schema
+        wrapper.__name__ = func_name
+        wrapper.__doc__ = inspect.getdoc(original_func)
+        wrapper.__signature__ = inspect.signature(original_func)
+        if hasattr(original_func, "__annotations__"):
+            wrapper.__annotations__ = original_func.__annotations__
+        return wrapper
+
+    for name, obj in inspect.getmembers(uc_tools, inspect.isfunction):
+        if not name.startswith("_"):
+            executor = create_uc_executor(name, obj)
+            langchain_tools.append(tool(executor))
+            
     return langchain_tools
 
 def discover_skills():

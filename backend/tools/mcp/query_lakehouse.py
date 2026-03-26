@@ -6,7 +6,7 @@ def query_lakehouse(sql_query: str) -> str:
     """
     Execute a read-only SQL query against the Databricks Lakehouse.
     Use this tool to answer general questions about the data that aren't covered by specific tools like get_inventory.
-    For example, if asked 'What BUs are in the safety stock table?', you can query SELECT DISTINCT business_unit FROM taylor_hanson_build_catalog.supply_chain_schema.safety_stock.
+    The agent will execute this query against the configured CATALOG_SCHEMA.
     """
     try:
         w = WorkspaceClient(profile=os.getenv("DATABRICKS_PROFILE", "myenv"))

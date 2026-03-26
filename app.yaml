@@ -1,0 +1,19 @@
+command:
+  - "python"
+  - "-m"
+  - "uvicorn"
+  - "backend.app:app"
+  - "--host"
+  - "0.0.0.0"
+  - "--port"
+  - "8000"
+
+env:
+  - name: CATALOG_SCHEMA
+    value: "taylor_hanson_build_catalog.supply_chain_schema"
+  - name: LLM_MODEL_NAME
+    value: "databricks-claude-sonnet-4-6"
+  - name: MAX_TOKENS
+    value: "16384"
+  - name: MAX_ITERATIONS
+    value: "10"

@@ -21,7 +21,7 @@ def manage_safety_stock(instruction: str, file_name: str = None, dry_run: bool =
     try:
         from backend.agent.config import CATALOG_SCHEMA
     except ImportError:
-        CATALOG_SCHEMA = "taylor_hanson_build_catalog.supply_chain_schema"
+        CATALOG_SCHEMA = os.getenv("CATALOG_SCHEMA", "taylor_hanson_build_catalog.supply_chain_schema")
         
     catalog, schema = CATALOG_SCHEMA.split(".")
     table_name = f"{CATALOG_SCHEMA}.safety_stock"

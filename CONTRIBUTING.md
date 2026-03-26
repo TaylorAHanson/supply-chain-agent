@@ -24,7 +24,7 @@ Simply open `backend/agent/prompt.md` and edit the text.
 You are a helpful, extremely polite supply chain AI agent. 
 Never guess inventory numbers; if you don't know, explicitly state "I don't know."
 ```
-*Note: Because the system prompt is bundled into the model, you must re-run `deploy.sh` (or `deploy_agent.py`) after making changes for them to take effect in the hosted endpoint.*
+*Note: The prompt is read at runtime by the FastAPI backend. In local development (`dev.sh`), changes take effect immediately on reload. In production, you must re-run `./deploy_app.sh`.*
 
 ---
 
@@ -35,7 +35,7 @@ Never guess inventory numbers; if you don't know, explicitly state "I don't know
 **How to modify:**
 Create a new Markdown file in the `backend/skills/` directory.
 
-The agent will automatically discover this file during deployment. The only requirement is that the file must start with a YAML block describing when to use the skill, followed by the markdown instructions.
+The agent will automatically discover this file. The only requirement is that the file must start with a YAML block describing when to use the skill, followed by the markdown instructions.
 
 **Example: `backend/skills/expedite_policy.md`**
 ```markdown
@@ -55,7 +55,7 @@ If a user asks to expedite a shipment, follow these steps:
 
 **When to modify:** You want the agent to actually *do* something—execute a SQL query, hit a third-party API, send a Slack message, or update a database table.
 
-The agent runs inside a **Databricks Model Serving Serverless Container** and uses the **LangGraph/LangChain** framework. Any Python function you add will automatically be converted into a LangChain `@tool` and injected into the agent's brain.
+The agent runs inside a **Databricks App Container** and uses the **LangGraph/LangChain** framework. Any Python function you add will automatically be converted into a LangChain `@tool` and injected into the agent's brain.
 
 ### How to modify:
 1. Create a new Python file in the `backend/tools/mcp/` directory. The filename **must** match the function name.
@@ -76,6 +76,21 @@ def notify_warehouse_manager(warehouse_id: str, message: str) -> str:
 ```
 
 ### Important Notes on Tools:
-* **Execution Environment:** Your code will execute *inside* the Databricks Model Serving container, using the endpoint's configured Service Principal credentials.
-* **Dependencies:** If your tool requires a new pip package (e.g., `requests` or `twilio`), you must add it to the `pip_requirements` list in `backend/agent/model.py` and the repository's `requirements.txt`.
-* **Deployment:** Tool changes require a full redeployment of the agent (`deploy.sh`), as the Python code needs to be repackaged into the new Model version.
+* **Execution Environment:** Your code will execute *inside* the Databricks App container. If it interacts with Databricks APIs (like Genie or UC), it will use the App's injected Service Principal credentials in production, or your CLI profile locally.
+* **Dependencies:** If your tool requires a new pip package (e.g., `requests` or `twilio`), you must add it to `requirements.txt`.
+* **Deployment:** After adding a new tool, run `./deploy_app.sh` to package and deploy the new code to Databricks Apps.
+
+---
+
+## 4. Local Development
+
+To test your changes before deploying:
+
+1. Ensure your Databricks CLI is authenticated (`databricks auth login`).
+2. Run the local development script:
+   ```bash
+   ./dev.sh
+   ```
+3. This script will start the FastAPI backend on port 8000 and the React frontend on port 5173.
+4. Open your browser to `http://localhost:5173`. 
+5. The backend uses `uvicorn --reload`, so changes to Python files (or markdown skills/prompts) will automatically restart the server. Changes to React files will hot-reload in the browser.

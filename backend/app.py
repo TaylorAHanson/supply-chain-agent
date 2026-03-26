@@ -3,12 +3,16 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from databricks.sdk import WorkspaceClient
-from backend.agent.config import AGENT_ENDPOINT_NAME, CATALOG_SCHEMA, MAX_ITERATIONS
+from backend.agent.config import CATALOG_SCHEMA, MAX_ITERATIONS
 
-LOCAL_MODE = os.getenv("LOCAL_MODE", "false").lower() == "true"
+IS_DATABRICKS_APP = bool(os.getenv("DATABRICKS_APP_NAME"))
 
 # Initialize Databricks SDK.
-w = WorkspaceClient(profile=os.getenv("DATABRICKS_PROFILE", "myenv"))
+if IS_DATABRICKS_APP:
+    # Auto-authenticates using the App's service principal
+    w = WorkspaceClient()
+else:
+    w = WorkspaceClient(profile=os.getenv("DATABRICKS_PROFILE", "myenv"))
 
 app = FastAPI(title="Supply Chain Agent API")
 
@@ -51,139 +55,53 @@ async def chat(request: ChatRequest):
         session_history[request.session_id].append({"role": "user", "content": request.query})
         
         tool_calls_executed = []
-        if LOCAL_MODE:
-            print("Running LangGraph agent in LOCAL_MODE...")
-            from backend.agent.model import SupplyChainLangGraphAgent
-            from mlflow.types.responses import ResponsesAgentRequest
-            
-            agent = SupplyChainLangGraphAgent()
-            agent.load_context(None)
-            
-            # Construct the ResponsesAgentRequest
-            req = ResponsesAgentRequest(
-                input=[{"role": msg["role"], "content": msg["content"]} for msg in session_history[request.session_id]]
-            )
-            
-            # Use Server-Sent Events to stream the response
-            from fastapi.responses import StreamingResponse
-            import json
-            
-            async def event_generator():
-                nonlocal tool_calls_executed
-                output_msg = ""
-                try:
-                    for stream_event in agent.predict_stream(req):
-                        # The type could be accessible via attribute or dict key depending on MLflow version
-                        event_type = getattr(stream_event, "type", None) if not isinstance(stream_event, dict) else stream_event.get("type")
-                        
-                        if event_type in ["response.output_text.delta", "output_text.delta"]:
-                            chunk = getattr(stream_event, "delta", "") if not isinstance(stream_event, dict) else stream_event.get("delta", "")
-                            if chunk:
-                                output_msg += chunk
-                                yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
-                        elif event_type == "response.output_item.done":
-                            # We monkey patched custom_outputs onto the done event in model.py
-                            if hasattr(stream_event, "custom_outputs"):
-                                tool_calls_executed = stream_event.custom_outputs.get("tool_calls", [])
-                                yield f"data: {json.dumps({'type': 'tool_calls', 'content': tool_calls_executed})}\n\n"
-                except Exception as stream_err:
-                    print(f"DEBUG: Streaming error: {stream_err}")
-                    import traceback
-                    traceback.print_exc()
-                    yield f"data: {json.dumps({'type': 'error', 'content': str(stream_err)})}\n\n"
-                finally:
-                    # Normal response received, break loop
-                    session_history[request.session_id].append({"role": "assistant", "content": output_msg})
-                    yield "data: [DONE]\n\n"
+        
+        from backend.agent.model import SupplyChainLangGraphAgent
+        
+        agent = SupplyChainLangGraphAgent()
+        agent.load_context(None)
+        
+        # Construct the request dictionary matching MLflow ResponsesAgent schema
+        req = {
+            "input": [{"role": msg["role"], "content": msg["content"]} for msg in session_history[request.session_id]],
+            "custom_inputs": {"session_id": request.session_id}
+        }
+        
+        # Use Server-Sent Events to stream the response
+        from fastapi.responses import StreamingResponse
+        import json
+        
+        async def event_generator():
+            nonlocal tool_calls_executed
+            output_msg = ""
+            try:
+                for stream_event in agent.predict_stream(req):
+                    # The type could be accessible via attribute or dict key depending on MLflow version
+                    event_type = getattr(stream_event, "type", None) if not isinstance(stream_event, dict) else stream_event.get("type")
                     
-            return StreamingResponse(event_generator(), media_type="text/event-stream")
+                    if event_type in ["response.output_text.delta", "output_text.delta"]:
+                        chunk = getattr(stream_event, "delta", "") if not isinstance(stream_event, dict) else stream_event.get("delta", "")
+                        if chunk:
+                            output_msg += chunk
+                            yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
+                    elif event_type in ["response.output_item.done", "output_item.done"]:
+                        if hasattr(stream_event, "custom_outputs"):
+                            tool_calls_executed = stream_event.custom_outputs.get("tool_calls", [])
+                            yield f"data: {json.dumps({'type': 'tool_calls', 'content': tool_calls_executed})}\n\n"
+                        elif isinstance(stream_event, dict) and "custom_outputs" in stream_event:
+                            tool_calls_executed = stream_event.get("custom_outputs", {}).get("tool_calls", [])
+                            yield f"data: {json.dumps({'type': 'tool_calls', 'content': tool_calls_executed})}\n\n"
+            except Exception as stream_err:
+                print(f"DEBUG: Streaming error: {stream_err}")
+                import traceback
+                traceback.print_exc()
+                yield f"data: {json.dumps({'type': 'error', 'content': str(stream_err)})}\n\n"
+            finally:
+                # Normal response received, break loop
+                session_history[request.session_id].append({"role": "assistant", "content": output_msg})
+                yield "data: [DONE]\n\n"
                 
-        else:
-            # Call the hosted agent endpoint using streaming
-            import json
-            import httpx
-            from fastapi.responses import StreamingResponse
-            
-            # Construct the endpoint URL
-            host = w.config.host
-            
-            # Authenticate properly (handles OAuth, PATs, etc)
-            auth_headers = w.config.authenticate()
-            if isinstance(auth_headers, dict) and "Authorization" in auth_headers:
-                token = auth_headers["Authorization"].replace("Bearer ", "")
-            else:
-                token = w.config.token
-                
-            # Use the OpenAI-compatible chat/completions endpoint for ResponsesAgent
-            endpoint_url = f"{host}/serving-endpoints/{AGENT_ENDPOINT_NAME}/invocations"
-            
-            headers = {
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json"
-            }
-            
-            payload = {
-                "input": session_history[request.session_id],
-                "stream": True,
-                "custom_inputs": {"session_id": request.session_id}
-            }
-            
-            async def remote_event_generator():
-                nonlocal tool_calls_executed
-                output_msg = ""
-                
-                try:
-                    async with httpx.AsyncClient() as client:
-                        async with client.stream("POST", endpoint_url, headers=headers, json=payload, timeout=60.0) as response:
-                            if response.status_code != 200:
-                                error_text = await response.aread()
-                                print(f"DEBUG: Endpoint returned {response.status_code}: {error_text}")
-                                yield f"data: {json.dumps({'type': 'error', 'content': f'Endpoint returned {response.status_code}'})}\n\n"
-                                return
-                                
-                            async for line in response.aiter_lines():
-                                if not line:
-                                    continue
-                                    
-                                if line.startswith("data: "):
-                                    data_str = line[6:]
-                                    if data_str == "[DONE]":
-                                        break
-                                        
-                                    try:
-                                        data = json.loads(data_str)
-                                        
-                                        event_type = data.get("type", "")
-                                        
-                                        # Handle MLflow ResponsesAgent chunks
-                                        if event_type in ["response.output_text.delta", "output_text.delta"]:
-                                            chunk = data.get("delta", "")
-                                            if chunk:
-                                                output_msg += chunk
-                                                yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
-                                                
-                                        # Also look for custom_outputs if the Databricks backend sends them in the stream
-                                        if "custom_outputs" in data or event_type == "response.output_item.done":
-                                            custom_outs = data.get("custom_outputs", {})
-                                            tool_calls = custom_outs.get("tool_calls", [])
-                                            if tool_calls:
-                                                tool_calls_executed = tool_calls
-                                                yield f"data: {json.dumps({'type': 'tool_calls', 'content': tool_calls_executed})}\n\n"
-                                                
-                                    except json.JSONDecodeError:
-                                        pass
-                                        
-                except Exception as stream_err:
-                    print(f"DEBUG: Remote streaming error: {stream_err}")
-                    import traceback
-                    traceback.print_exc()
-                    yield f"data: {json.dumps({'type': 'error', 'content': str(stream_err)})}\n\n"
-                finally:
-                    # Normal response received, break loop
-                    session_history[request.session_id].append({"role": "assistant", "content": output_msg})
-                    yield "data: [DONE]\n\n"
-                    
-            return StreamingResponse(remote_event_generator(), media_type="text/event-stream")
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
         
     except Exception as e:
         error_msg = str(e)
@@ -208,6 +126,18 @@ async def upload_file(file: UploadFile = File(...)):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+# Mount static React frontend for Databricks Apps
+frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "dist")
+if os.path.exists(frontend_dir):
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.responses import FileResponse
+    
+    app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dir, "assets")), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        return FileResponse(os.path.join(frontend_dir, "index.html"))
 
 if __name__ == "__main__":
     import uvicorn

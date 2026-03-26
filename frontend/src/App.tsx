@@ -32,30 +32,31 @@ function App() {
     scrollToBottom()
   }, [messages])
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!input.trim() || isLoading) return
-
-    const userMessage = input.trim()
-    setInput('')
-    
-    // Add user message and a placeholder for the assistant's response
-    setMessages(prev => [
-      ...prev, 
-      { role: 'user', content: userMessage },
-      { role: 'assistant', content: '', tool_calls: [] } // Placeholder
-    ])
-    setIsLoading(true)
-
+  const handleClearChat = async () => {
     try {
-      const response = await fetch('http://localhost:8000/chat', {
+      await fetch('/clear_chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ session_id: sessionId }),
+      })
+      setMessages([{ role: 'assistant', content: 'Chat history cleared. How can I help you today?' }])
+    } catch (error) {
+      console.error('Error clearing chat:', error)
+    }
+  }
+
+  const sendQueryAndStream = async (query: string) => {
+    try {
+      const response = await fetch('/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           session_id: sessionId,
-          query: userMessage,
+          query: query,
         }),
       })
 
@@ -63,15 +64,13 @@ function App() {
         throw new Error('Failed to get response')
       }
 
-      // Check if it's an event stream (LOCAL_MODE)
+      // Check if it's an event stream
       const contentType = response.headers.get("content-type");
       if (contentType && contentType.includes("text/event-stream")) {
         const reader = response.body?.getReader();
         const decoder = new TextDecoder("utf-8");
         
         if (reader) {
-          // Keep isLoading true until the stream finishes so the send button stays disabled
-          
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
@@ -104,6 +103,9 @@ function App() {
                       const lastMessage = { ...newMessages[lastMessageIndex] };
                       if (lastMessage.role === 'assistant') {
                         lastMessage.tool_calls = data.content;
+                        if (lastMessage.content && !lastMessage.content.endsWith('\n\n')) {
+                          lastMessage.content += '\n\n';
+                        }
                       }
                       newMessages[lastMessageIndex] = lastMessage;
                       return newMessages;
@@ -121,7 +123,6 @@ function App() {
         const data = await response.json()
         setMessages(prev => {
           const newMessages = [...prev];
-          // Replace the placeholder with the actual response
           newMessages[newMessages.length - 1] = {
             role: 'assistant',
             content: data.message,
@@ -146,6 +147,24 @@ function App() {
     }
   }
 
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!input.trim() || isLoading) return
+
+    const userMessage = input.trim()
+    setInput('')
+    
+    // Add user message and a placeholder for the assistant's response
+    setMessages(prev => [
+      ...prev, 
+      { role: 'user', content: userMessage },
+      { role: 'assistant', content: '', tool_calls: [] } // Placeholder
+    ])
+    setIsLoading(true)
+
+    await sendQueryAndStream(userMessage)
+  }
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -157,7 +176,7 @@ function App() {
     formData.append('file', file)
 
     try {
-      const response = await fetch('http://localhost:8000/upload', {
+      const response = await fetch('/upload', {
         method: 'POST',
         body: formData,
       })
@@ -169,35 +188,13 @@ function App() {
       const data = await response.json()
       
       // Notify the agent generically that a file was uploaded so it can respond
-      try {
-        const autoResponse = await fetch('http://localhost:8000/chat', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            session_id: sessionId,
-            query: `[System Event] I have successfully uploaded a file named "${data.filename}" to the volume path "${data.volume_path}". Please acknowledge this upload and ask me what I would like to do with it.`,
-          }),
-        })
-        
-        if (autoResponse.ok) {
-          const autoData = await autoResponse.json()
-          setMessages(prev => [...prev, { 
-            role: 'assistant', 
-            content: autoData.message,
-            tool_calls: autoData.tool_calls 
-          }])
-        } else {
-          throw new Error("Agent failed to respond to upload notification")
-        }
-      } catch (autoErr) {
-        console.error('Error communicating upload to agent:', autoErr)
-        setMessages(prev => [...prev, { 
-          role: 'assistant', 
-          content: `File ${data.filename} uploaded successfully to ${data.volume_path}, but I encountered an error responding.` 
-        }])
-      }
+      setMessages(prev => [
+        ...prev, 
+        { role: 'assistant', content: '', tool_calls: [] } // Placeholder
+      ])
+      
+      const query = `[System Event] I have successfully uploaded a file named "${data.filename}" to the volume path "${data.volume_path}". Please acknowledge this upload and ask me what I would like to do with it.`
+      await sendQueryAndStream(query)
       
     } catch (error) {
       console.error('Error:', error)
@@ -205,25 +202,10 @@ function App() {
         role: 'assistant', 
         content: `Failed to upload file ${file.name}.` 
       }])
-    } finally {
       setIsLoading(false)
+    } finally {
       // Reset input
       e.target.value = ''
-    }
-  }
-
-  const handleClearChat = async () => {
-    try {
-      await fetch('http://localhost:8000/clear_chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ session_id: sessionId }),
-      })
-      setMessages([{ role: 'assistant', content: 'Chat history cleared. How can I help you today?' }])
-    } catch (error) {
-      console.error('Error clearing chat:', error)
     }
   }
 
@@ -250,9 +232,18 @@ function App() {
                 ) : (
                   <div className="agent-message-content leading-relaxed prose prose-sm max-w-none">
                     {msg.content ? (
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {msg.content}
-                      </ReactMarkdown>
+                      <>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {msg.content}
+                        </ReactMarkdown>
+                        {isLoading && idx === messages.length - 1 && (
+                          <div className="flex items-center space-x-1.5 h-6 px-1 mt-2">
+                            <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></div>
+                            <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                            <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
+                          </div>
+                        )}
+                      </>
                     ) : (
                       <div className="flex items-center space-x-1.5 h-6 px-1">
                         <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></div>

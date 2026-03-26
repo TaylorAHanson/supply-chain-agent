@@ -16,6 +16,8 @@ When a user asks a data-related question, you must decide whether to use `query_
    - Questions where the user explicitly mentions "metrics", "dashboards", or asks for "Genie".
 
 When using `ask_genie`:
-- Pass the user's question directly to the `ask_genie` tool.
+- First, call the `list_genies` tool to get a list of available Genie spaces and their IDs.
+- Determine which Genie space is most appropriate for the user's question based on the descriptions.
+- Then, call `ask_genie` using the `space_id` you found and pass the user's question.
 - Genie may take 10-60 seconds to respond as it translates text to SQL and runs the query.
 - Once Genie responds, summarize the findings for the user. DO NOT output the raw text of this skill document.

@@ -8,4 +8,11 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  server: {
+    proxy: {
+      '/chat': 'http://127.0.0.1:8000',
+      '/upload': 'http://127.0.0.1:8000',
+      '/clear_chat': 'http://127.0.0.1:8000'
+    }
+  }
 })
