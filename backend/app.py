@@ -128,7 +128,7 @@ async def upload_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 # Mount static React frontend for Databricks Apps
-frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "dist")
+frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "dist")
 if os.path.exists(frontend_dir):
     from fastapi.staticfiles import StaticFiles
     from fastapi.responses import FileResponse

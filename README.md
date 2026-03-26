@@ -115,7 +115,7 @@ We use a **dynamic discovery model** managed by `backend/tools/registry.py`. We 
 
 ```text
 /
-├── backend/
+├── backend/                   # Python backend (FastAPI + LangGraph)
 │   ├── app.py                 # FastAPI backend server
 │   ├── agent/
 │   │   ├── model.py           # LangGraph agent definition
@@ -125,7 +125,9 @@ We use a **dynamic discovery model** managed by `backend/tools/registry.py`. We 
 │   └── tools/
 │       ├── mcp/               # Individual Python tools (e.g. ask_genie.py)
 │       └── registry.py        # Dynamic tool/skill discovery
-├── frontend/                  # React + Tailwind UI (Vite)
+├── src/                       # React frontend code
+├── public/                    # Static frontend assets
+├── package.json               # Node.js dependencies
 ├── app.yaml                   # Databricks Apps configuration
 ├── deploy_app.sh              # Production deployment script
 ├── dev.sh                     # Local development script

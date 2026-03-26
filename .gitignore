@@ -1,3 +1,18 @@
+# Node / Frontend
+node_modules/
+dist/
+dist-ssr
+*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
 # Python
 __pycache__/
 *.py[cod]
@@ -6,10 +21,6 @@ __pycache__/
 .Python
 env/
 build/
-# develop-eggs/
-# dist/ is kept but we want to make sure frontend/dist is NOT ignored
-# dist/
-!frontend/dist/
 downloads/
 eggs/
 .eggs/
@@ -23,13 +34,9 @@ wheels/
 .installed.cfg
 *.egg
 
-# Logs
-logs/*
-
 # Virtual environments
 .env
 .venv
-env/
 venv/
 ENV/
 
@@ -39,16 +46,6 @@ ENV/
 .idea/
 .cursor/
 
-# Node / Frontend
-frontend/node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
 # MLflow
 mlruns/
 mlflow.db
-
-# Project specifics (deprecated)
-.chat_history.json
-mcp_tools_config.json

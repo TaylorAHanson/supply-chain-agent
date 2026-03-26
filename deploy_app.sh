@@ -21,7 +21,7 @@ if [[ -z "${DATABRICKS_PROFILE}" ]]; then
     export DATABRICKS_PROFILE=${input_profile:-"DEFAULT"}
 fi
 
-export APP_NAME=${APP_NAME:-"supply-chain-agent"}
+export APP_NAME=${APP_NAME:-"supply-chain-agent-v2"}
 
 echo "----------------------------------------"
 echo "Deployment Configuration:"
@@ -29,25 +29,20 @@ echo "Profile:         $DATABRICKS_PROFILE"
 echo "App Name:        $APP_NAME"
 echo "----------------------------------------"
 
-echo "🎨 Building React frontend..."
-cd frontend
-npm run build
-cd ..
-
 echo "📦 Syncing code to Databricks Workspace..."
 # Create a hidden target folder in user's workspace
 USER_EMAIL=$(databricks current-user me --profile $DATABRICKS_PROFILE | grep userName | cut -d '"' -f 4)
 TARGET_PATH="/Workspace/Users/$USER_EMAIL/$APP_NAME-code"
 
 echo "Target path: $TARGET_PATH"
+
 # Using databricks sync to rapidly upload code. It ignores paths in .gitignore automatically
 databricks sync . $TARGET_PATH --profile $DATABRICKS_PROFILE \
   --exclude node_modules \
+  --exclude dist \
   --exclude .venv \
   --exclude __pycache__ \
   --exclude .git \
-  --exclude frontend/src \
-  --exclude frontend/public \
   --exclude .DS_Store
 
 echo "🏗️ Checking if App exists..."
