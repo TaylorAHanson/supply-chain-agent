@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# Prevent MSYS (Git Bash on Windows) from converting Databricks workspace paths to local Windows paths
+export MSYS_NO_PATHCONV=1
+
 # Supply Chain Agent - Databricks Apps Deployment Script
 # 
 # Usage:
@@ -8,8 +11,16 @@ set -e
 
 echo "🚀 Starting Databricks App Deployment Process..."
 
-# Default environment variables
-export DATABRICKS_PROFILE=${DATABRICKS_PROFILE:-"DEFAULT"}
+# Prompt for profile if not set in environment
+if [[ -z "${DATABRICKS_PROFILE}" ]]; then
+    echo "Available Databricks profiles:"
+    databricks auth profiles 2>/dev/null | grep -v 'Warning' || cat ~/.databrickscfg | grep '\[' | tr -d '[]' | sed 's/^/  - /'
+    echo ""
+    echo "Please enter the Databricks CLI profile to use (default: DEFAULT):"
+    read -p "> " input_profile
+    export DATABRICKS_PROFILE=${input_profile:-"DEFAULT"}
+fi
+
 export APP_NAME=${APP_NAME:-"supply-chain-agent"}
 
 echo "----------------------------------------"

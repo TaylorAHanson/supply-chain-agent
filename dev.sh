@@ -8,10 +8,10 @@ trap cleanup INT TERM EXIT
 function cleanup() {
     echo ""
     echo "🛑 Stopping services..."
-    if [ -n "$BACKEND_PID" ]; then
+    if [[ -n "$BACKEND_PID" ]]; then
         kill $BACKEND_PID 2>/dev/null
     fi
-    if [ -n "$FRONTEND_PID" ]; then
+    if [[ -n "$FRONTEND_PID" ]]; then
         kill $FRONTEND_PID 2>/dev/null
     fi
     exit 0
@@ -27,7 +27,7 @@ else
 fi
 
 # Ensure dependencies are installed (optional, but helpful for dev)
-if [ ! -d "frontend/node_modules" ]; then
+if [[ ! -d "frontend/node_modules" ]]; then
     echo "📦 Installing frontend dependencies..."
     cd frontend && npm install && cd ..
 fi

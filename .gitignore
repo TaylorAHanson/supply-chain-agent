@@ -6,8 +6,10 @@ __pycache__/
 .Python
 env/
 build/
-develop-eggs/
-dist/
+# develop-eggs/
+# dist/ is kept but we want to make sure frontend/dist is NOT ignored
+# dist/
+!frontend/dist/
 downloads/
 eggs/
 .eggs/
