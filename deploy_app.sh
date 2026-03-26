@@ -9,7 +9,7 @@ set -e
 echo "🚀 Starting Databricks App Deployment Process..."
 
 # Default environment variables
-export DATABRICKS_PROFILE=${DATABRICKS_PROFILE:-"myenv"}
+export DATABRICKS_PROFILE=${DATABRICKS_PROFILE:-"DEFAULT"}
 export APP_NAME=${APP_NAME:-"supply-chain-agent"}
 
 echo "----------------------------------------"

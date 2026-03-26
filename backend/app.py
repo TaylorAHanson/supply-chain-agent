@@ -12,7 +12,7 @@ if IS_DATABRICKS_APP:
     # Auto-authenticates using the App's service principal
     w = WorkspaceClient()
 else:
-    w = WorkspaceClient(profile=os.getenv("DATABRICKS_PROFILE", "myenv"))
+    w = WorkspaceClient(profile=os.getenv("DATABRICKS_PROFILE"))
 
 app = FastAPI(title="Supply Chain Agent API")
 

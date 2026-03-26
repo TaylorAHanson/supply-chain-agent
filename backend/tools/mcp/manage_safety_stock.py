@@ -27,7 +27,7 @@ def manage_safety_stock(instruction: str, file_name: str = None, dry_run: bool =
     table_name = f"{CATALOG_SCHEMA}.safety_stock"
     
     try:
-        w = WorkspaceClient(profile=os.getenv("DATABRICKS_PROFILE", "myenv"))
+        w = WorkspaceClient(profile=os.getenv("DATABRICKS_PROFILE"))
     except Exception as e:
         return f"Error connecting to Databricks: {str(e)}"
         

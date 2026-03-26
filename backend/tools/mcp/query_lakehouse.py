@@ -9,7 +9,7 @@ def query_lakehouse(sql_query: str) -> str:
     The agent will execute this query against the configured CATALOG_SCHEMA.
     """
     try:
-        w = WorkspaceClient(profile=os.getenv("DATABRICKS_PROFILE", "myenv"))
+        w = WorkspaceClient(profile=os.getenv("DATABRICKS_PROFILE"))
     except:
         return "Error: Could not connect to Databricks."
         

@@ -18,7 +18,7 @@ class SupplyChainLangGraphAgent:
         if is_app:
             self.w = WorkspaceClient()
         else:
-            profile = os.getenv("DATABRICKS_PROFILE", "myenv")
+            profile = os.getenv("DATABRICKS_PROFILE")
             self.w = WorkspaceClient(profile=profile)
         
         # Get authentication token and host

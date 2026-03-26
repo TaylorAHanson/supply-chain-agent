@@ -7,7 +7,7 @@ def list_genies() -> str:
     Use this tool to find the appropriate Genie Space ID before calling the `ask_genie` tool.
     """
     try:
-        w = WorkspaceClient(profile=os.getenv("DATABRICKS_PROFILE", "myenv"))
+        w = WorkspaceClient(profile=os.getenv("DATABRICKS_PROFILE"))
     except Exception as e:
         return f"Error connecting to Databricks: {str(e)}"
         

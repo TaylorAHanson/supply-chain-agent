@@ -112,7 +112,7 @@ def get_langchain_tools():
                 CATALOG_SCHEMA = os.getenv("CATALOG_SCHEMA", "taylor_hanson_build_catalog.supply_chain_schema")
             
             try:
-                w = WorkspaceClient(profile=os.getenv("DATABRICKS_PROFILE", "myenv") if not os.environ.get("DATABRICKS_APP_NAME") else None)
+                w = WorkspaceClient(profile=os.getenv("DATABRICKS_PROFILE") if not os.environ.get("DATABRICKS_APP_NAME") else None)
                 
                 warehouses = list(w.warehouses.list())
                 wh_id = next((wh.id for wh in warehouses if wh.state.name in ['RUNNING', 'STARTING']), None)
