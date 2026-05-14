@@ -9,60 +9,20 @@ export MSYS_NO_PATHCONV=1
 # Usage:
 #   ./deploy_app.sh
 
-echo "🚀 Starting Databricks App Deployment Process..."
+echo "🚀 Starting Databricks App Deployment Process using Asset Bundles..."
 
-# Prompt for profile if not set in environment
-if [[ -z "${DATABRICKS_PROFILE}" ]]; then
-    echo "Available Databricks profiles:"
-    databricks auth profiles 2>/dev/null | grep -v 'Warning' || cat ~/.databrickscfg | grep '\[' | tr -d '[]' | sed 's/^/  - /'
-    echo ""
-    echo "Please enter the Databricks CLI profile to use (default: DEFAULT):"
-    read -p "> " input_profile
-    export DATABRICKS_PROFILE=${input_profile:-"DEFAULT"}
-fi
+echo "📦 Validating bundle..."
+databricks bundle validate -t dev
 
-export APP_NAME=${APP_NAME:-"supply-chain-agent-v2"}
+echo "🚀 Deploying bundle to Databricks..."
+databricks bundle deploy -t dev
 
-echo "----------------------------------------"
-echo "Deployment Configuration:"
-echo "Profile:         $DATABRICKS_PROFILE"
-echo "App Name:        $APP_NAME"
-echo "----------------------------------------"
-
-echo "📦 Syncing code to Databricks Workspace..."
-# Create a hidden target folder in user's workspace
-USER_EMAIL=$(databricks current-user me --profile $DATABRICKS_PROFILE | grep userName | cut -d '"' -f 4)
-TARGET_PATH="/Workspace/Users/$USER_EMAIL/$APP_NAME-code"
-
-echo "Target path: $TARGET_PATH"
-
-# Using databricks sync to rapidly upload code. It ignores paths in .gitignore automatically
-databricks sync . $TARGET_PATH --profile $DATABRICKS_PROFILE \
-  --exclude node_modules \
-  --exclude dist \
-  --exclude .venv \
-  --exclude __pycache__ \
-  --exclude .git \
-  --exclude .DS_Store
-
-echo "🏗️ Checking if App exists..."
-if databricks apps get $APP_NAME --profile $DATABRICKS_PROFILE > /dev/null 2>&1; then
-    echo "App '$APP_NAME' already exists. Updating..."
-else
-    echo "Creating new Databricks App '$APP_NAME'..."
-    databricks apps create $APP_NAME --profile $DATABRICKS_PROFILE
-    
-    # Wait for the app to be created and compute assigned
-    echo "Waiting for app environment to be provisioned (this can take 2-3 minutes)..."
-    sleep 30
-fi
-
-echo "🚀 Deploying to Databricks Apps..."
-databricks apps deploy $APP_NAME --source-code-path $TARGET_PATH --profile $DATABRICKS_PROFILE
+echo "🏃 Running the app..."
+databricks bundle run supply_chain_agent -t dev
 
 echo ""
-echo "✅ Deployment initiated!"
-echo "Get the URL of your app with:"
-echo "  databricks apps get $APP_NAME --profile $DATABRICKS_PROFILE"
+echo "✅ Deployment complete!"
+echo "Get the URL of your app from the Databricks UI or by running:"
+echo "  databricks apps get supply-chain-agent --profile $DATABRICKS_PROFILE"
 echo ""
 echo "To view live streaming logs, append /logz to your App URL!"

@@ -75,122 +75,197 @@ def discover_tools():
             
     return schemas, execution_routing
 
-def get_langchain_tools():
+def get_langchain_tools(w=None):
     """
     Discovers all tools dynamically and wraps them as LangChain tools.
     """
     from langchain_core.tools import tool
-    import backend.tools.uc_tools as uc_tools
-    import pkgutil
-    import importlib
-    import backend.tools.mcp
+    import os
     
     langchain_tools = []
     
-    # FastMCP Tools
-    for _, module_name, _ in pkgutil.iter_modules(backend.tools.mcp.__path__):
-        if module_name.startswith("_"): continue
+    # Use Databricks Langchain UCFunctionToolkit to load tools
+    try:
+        from databricks_langchain import UCFunctionToolkit
+        from backend.agent.config import CATALOG_SCHEMA
+        from databricks.sdk import WorkspaceClient
+        
+        # Initialize the WorkspaceClient if not provided
+        if w is None:
+            is_app = bool(os.environ.get("DATABRICKS_APP_NAME"))
+            if is_app:
+                w = WorkspaceClient()
+            else:
+                profile = os.getenv("DATABRICKS_PROFILE", "myenv")
+                w = WorkspaceClient(profile=profile)
+                
+        # Dynamically discover tools the user has access to
+        from backend.agent.config import DATABRICKS_WAREHOUSE_ID
+        func_names = []
         try:
-            mod = importlib.import_module(f"backend.tools.mcp.{module_name}")
-            if hasattr(mod, module_name):
-                func = getattr(mod, module_name)
-                if inspect.isfunction(func):
-                    langchain_tools.append(tool(func))
+            query_tools = """
+            SELECT routine_catalog, routine_schema, routine_name 
+            FROM system.information_schema.routines 
+            WHERE routine_type = 'FUNCTION' AND routine_catalog != 'system'
+            """
+            response_tools = w.statement_execution.execute_statement(
+                statement=query_tools,
+                warehouse_id=DATABRICKS_WAREHOUSE_ID,
+                wait_timeout="30s"
+            )
+            if response_tools.status.state.value == 'SUCCEEDED':
+                for row in response_tools.result.data_array:
+                    func_names.append(f"{row[0]}.{row[1]}.{row[2]}")
         except Exception as e:
-            print(f"Warning: Failed to load tool {module_name}: {e}")
-                
-    # Unity Catalog Tools
-    import os
-    import time
-    from databricks.sdk import WorkspaceClient
-    
-    def create_uc_executor(func_name, original_func):
-        def wrapper(**kwargs):
+            print(f"Warning: Failed to dynamically discover tools: {e}")
+            # Fallback to config schema if dynamic discovery fails
+            func_names = [
+                f"{CATALOG_SCHEMA}.get_inventory",
+                f"{CATALOG_SCHEMA}.get_supplier_lead_times",
+                f"{CATALOG_SCHEMA}.draft_purchase_order",
+                f"{CATALOG_SCHEMA}.manage_safety_stock",
+                f"{CATALOG_SCHEMA}.list_genies",
+                f"{CATALOG_SCHEMA}.ask_genie",
+                f"{CATALOG_SCHEMA}.notify_slack_channel",
+                f"{CATALOG_SCHEMA}.get_erp_supplier_status"
+            ]
+            
+        # Set the default client for Unity Catalog
+        try:
+            from unitycatalog.ai.core.client import set_uc_function_client
+            from unitycatalog.ai.core.databricks import DatabricksFunctionClient
+            
+            uc_client = DatabricksFunctionClient(client=w)
+            set_uc_function_client(uc_client)
+        except ImportError:
+            # unitycatalog-ai <= 0.3.x compatibility
             try:
-                from backend.agent.config import CATALOG_SCHEMA
+                from databricks_langchain.uc_function_toolkit import set_uc_function_client
+                set_uc_function_client(w)
             except ImportError:
-                CATALOG_SCHEMA = os.getenv("CATALOG_SCHEMA", "taylor_hanson_build_catalog.supply_chain_schema")
+                pass
             
+        toolkit = UCFunctionToolkit(function_names=func_names)
+        langchain_tools.extend(toolkit.tools)
+    except Exception as e:
+        print(f"Warning: Failed to load UC tools: {e}")
+        print("Falling back to local Python tools...")
+        import pkgutil
+        import importlib
+        import backend.tools.mcp
+        
+        for _, module_name, _ in pkgutil.iter_modules(backend.tools.mcp.__path__):
+            if module_name.startswith("_"): continue
             try:
-                w = WorkspaceClient(profile=os.getenv("DATABRICKS_PROFILE") if not os.environ.get("DATABRICKS_APP_NAME") else None)
-                
-                warehouses = list(w.warehouses.list())
-                wh_id = next((wh.id for wh in warehouses if wh.state.name in ['RUNNING', 'STARTING']), None)
-                if not wh_id and warehouses: wh_id = warehouses[0].id
-                if not wh_id: return "Error: No SQL warehouse found."
-                
-                # Construct SQL to call the UC function
-                args_str = ", ".join([f"'{v}'" if isinstance(v, str) else str(v) for v in kwargs.values()])
-                sql = f"SELECT * FROM {CATALOG_SCHEMA}.{func_name}({args_str})"
-                
-                res = w.statement_execution.execute_statement(statement=sql, warehouse_id=wh_id)
-                
-                while True:
-                    status = w.statement_execution.get_statement(res.statement_id).status
-                    if status.state.value in ["SUCCEEDED", "FAILED", "CANCELED", "CLOSED"]: break
-                    time.sleep(1)
-                    
-                if status.state.value == "SUCCEEDED":
-                    result = w.statement_execution.get_statement(res.statement_id)
-                    if result.result and result.result.data_array:
-                        columns = [col.name for col in result.manifest.schema.columns] if result.manifest and result.manifest.schema else []
-                        output = f"Columns: {columns}\nData:\n"
-                        for row in result.result.data_array[:100]:
-                            output += f"{row}\n"
-                        return output
-                    return f"Function executed successfully but returned no data."
-                return f"SQL Failed: {status.error.message}"
+                mod = importlib.import_module(f"backend.tools.mcp.{module_name}")
+                if hasattr(mod, module_name):
+                    func = getattr(mod, module_name)
+                    if inspect.isfunction(func):
+                        langchain_tools.append(tool(func))
             except Exception as e:
-                return f"Error executing UC function: {str(e)}"
+                print(f"Warning: Failed to load tool {module_name}: {e}")
                 
-        # Copy metadata from original function to wrapper so LangChain tool creation sees the right schema
-        wrapper.__name__ = func_name
-        wrapper.__doc__ = inspect.getdoc(original_func)
-        wrapper.__signature__ = inspect.signature(original_func)
-        if hasattr(original_func, "__annotations__"):
-            wrapper.__annotations__ = original_func.__annotations__
-        return wrapper
-
-    for name, obj in inspect.getmembers(uc_tools, inspect.isfunction):
-        if not name.startswith("_"):
-            executor = create_uc_executor(name, obj)
-            langchain_tools.append(tool(executor))
-            
     return langchain_tools
 
-def discover_skills():
+def discover_skills(w=None):
     """
-    Discovers all skills dynamically from the backend/skills/ directory.
+    Discovers all skills dynamically from the Unity Catalog volume.
     Returns a string formatted for the system prompt.
     """
     import os
-    skills_dir = os.path.join(os.path.dirname(__file__), "..", "skills")
+    from backend.agent.config import SKILLS_VOLUME_PATH
     
-    if not os.path.exists(skills_dir):
-        return ""
-        
     skills = []
-    for filename in os.listdir(skills_dir):
-        if filename.endswith(".md"):
-            skill_name = filename[:-3]
-            filepath = os.path.join(skills_dir, filename)
-            
-            description = "No description provided."
-            # Extract description from the YAML frontmatter if it exists
-            try:
-                with open(filepath, "r") as f:
-                    lines = f.readlines()
-                    if len(lines) > 2 and lines[0].strip() == "---":
-                        for line in lines[1:]:
-                            if line.strip() == "---":
-                                break
-                            if line.startswith("description:"):
-                                description = line.replace("description:", "").strip()
-                                break
-            except:
-                pass
+    
+    try:
+        # If we're in Databricks Apps, we can just read from the FUSE mount directly
+        is_app = bool(os.environ.get("DATABRICKS_APP_NAME"))
+        
+        # We will dynamically discover skills across all catalogs/schemas the user has access to
+        from backend.agent.config import DATABRICKS_WAREHOUSE_ID
+        
+        # Initialize the WorkspaceClient if not provided
+        if w is None:
+            from databricks.sdk import WorkspaceClient
+            if is_app:
+                w = WorkspaceClient()
+            else:
+                profile = os.getenv("DATABRICKS_PROFILE", "myenv")
+                w = WorkspaceClient(profile=profile)
                 
-            skills.append(f"- `{skill_name}`: {description}")
+        # Query for skills (volumes named 'skills')
+        query_skills = """
+        SELECT volume_catalog, volume_schema, volume_name 
+        FROM system.information_schema.volumes
+        WHERE volume_name = 'skills'
+        """
+        response_skills = w.statement_execution.execute_statement(
+            statement=query_skills,
+            warehouse_id=DATABRICKS_WAREHOUSE_ID,
+            wait_timeout="30s"
+        )
+        
+        volume_paths = []
+        if response_skills.status.state.value == 'SUCCEEDED':
+            for row in response_skills.result.data_array:
+                volume_paths.append(f"/Volumes/{row[0]}/{row[1]}/{row[2]}")
+        else:
+            # Fallback to config path
+            volume_paths.append(SKILLS_VOLUME_PATH)
+            
+        for volume_path in volume_paths:
+            if is_app and os.path.exists(volume_path):
+                for filename in os.listdir(volume_path):
+                    if filename.endswith(".md"):
+                        skill_name = filename[:-3]
+                        filepath = os.path.join(volume_path, filename)
+                        
+                        description = "No description provided."
+                        try:
+                            with open(filepath, "r") as f:
+                                lines = f.readlines()
+                                if len(lines) > 2 and lines[0].strip() == "---":
+                                    for line in lines[1:]:
+                                        if line.strip() == "---":
+                                            break
+                                        if line.startswith("description:"):
+                                            description = line.replace("description:", "").strip()
+                                            break
+                        except Exception as e:
+                            print(f"Error reading skill {filename}: {e}")
+                            
+                        skills.append(f"- `{skill_name}`: {description}")
+            else:
+                # Local development or FUSE not available, use WorkspaceClient
+                try:
+                    files = w.files.list_directory_contents(volume_path)
+                    for file_info in files:
+                        if file_info.path.endswith(".md"):
+                            filename = os.path.basename(file_info.path)
+                            skill_name = filename[:-3]
+                            
+                            description = "No description provided."
+                            try:
+                                # Download the file content
+                                response = w.files.download(file_info.path)
+                                content = response.contents.read().decode("utf-8")
+                                lines = content.split("\n")
+                                if len(lines) > 2 and lines[0].strip() == "---":
+                                    for line in lines[1:]:
+                                        if line.strip() == "---":
+                                            break
+                                        if line.startswith("description:"):
+                                            description = line.replace("description:", "").strip()
+                                            break
+                            except Exception as e:
+                                print(f"Error downloading skill {filename}: {e}")
+                                
+                            skills.append(f"- `{skill_name}`: {description}")
+                except Exception as e:
+                    print(f"Error listing skills volume {volume_path}: {e}")
+                    
+    except Exception as e:
+        print(f"Error in discover_skills: {e}")
             
     if not skills:
         return ""

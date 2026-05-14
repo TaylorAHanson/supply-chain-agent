@@ -2,6 +2,12 @@ import { useState, useRef, useEffect } from 'react'
 
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import ArchitecturePresentation from './ArchitecturePresentation'
+import ToolsAndSkillsModal from './ToolsAndSkillsModal'
+
+// Feature flag for architecture presentation
+const ENABLE_ARCHITECTURE_UI = import.meta.env.VITE_ENABLE_ARCHITECTURE_UI !== 'false';
+const ENABLE_TOOLS_UI = import.meta.env.VITE_ENABLE_TOOLS_UI !== 'false';
 
 interface ToolCall {
   tool_name: string;
@@ -12,6 +18,8 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   tool_calls?: ToolCall[];
+  trace_id?: string;
+  feedback?: 'up' | 'down';
 }
 
 function App() {
@@ -21,6 +29,8 @@ function App() {
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [sessionId] = useState(() => 'sess-' + Math.random().toString(36).substring(2, 9))
+  const [showArchitecture, setShowArchitecture] = useState(false)
+  const [showTools, setShowTools] = useState(false)
   
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -46,6 +56,34 @@ function App() {
       console.error('Error clearing chat:', error)
     }
   }
+
+  const handleFeedback = async (messageIndex: number, rating: 'up' | 'down') => {
+    const msg = messages[messageIndex];
+    if (msg.role !== 'assistant') return;
+    
+    // Optimistically update UI
+    setMessages(prev => {
+      const newMessages = [...prev];
+      newMessages[messageIndex] = { ...newMessages[messageIndex], feedback: rating };
+      return newMessages;
+    });
+
+    try {
+      await fetch('/feedback', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ 
+          session_id: sessionId,
+          trace_id: msg.trace_id || 'unknown',
+          rating: rating === 'up' ? 1 : -1
+        }),
+      });
+    } catch (error) {
+      console.error('Error submitting feedback:', error);
+    }
+  };
 
   const sendQueryAndStream = async (query: string) => {
     try {
@@ -108,6 +146,13 @@ function App() {
                         }
                       }
                       newMessages[lastMessageIndex] = lastMessage;
+                      return newMessages;
+                    });
+                  } else if (data.type === 'trace_id') {
+                    setMessages(prev => {
+                      const newMessages = [...prev];
+                      const lastMessageIndex = newMessages.length - 1;
+                      newMessages[lastMessageIndex] = { ...newMessages[lastMessageIndex], trace_id: data.content };
                       return newMessages;
                     });
                   }
@@ -215,8 +260,41 @@ function App() {
         <div>
           <h1 className="text-base font-semibold text-gray-800">Supply Chain Agent</h1>
           <p className="text-[10px] text-gray-500">Databricks Agent Framework + FastMCP</p>
-        </div>        
+        </div>
+        <div className="flex items-center space-x-2">
+          {ENABLE_TOOLS_UI && (
+            <button
+              onClick={() => setShowTools(true)}
+              className="text-xs bg-[#3253DC] text-white hover:bg-[#2842b0] px-3 py-1.5 rounded-md font-medium transition-colors flex items-center"
+            >
+              <svg className="w-3.5 h-3.5 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+              </svg>
+              My Tools & Skills
+            </button>
+          )}
+          {ENABLE_ARCHITECTURE_UI && (
+            <button
+              onClick={() => setShowArchitecture(true)}
+              className="text-xs bg-[#3253DC] text-white hover:bg-[#2842b0] px-3 py-1.5 rounded-md font-medium transition-colors flex items-center"
+            >
+              <svg className="w-3.5 h-3.5 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+              </svg>
+              Architecture
+            </button>
+          )}
+        </div>
       </header>
+
+      {showArchitecture && (
+        <ArchitecturePresentation onClose={() => setShowArchitecture(false)} />
+      )}
+
+      {showTools && (
+        <ToolsAndSkillsModal onClose={() => setShowTools(false)} />
+      )}
 
       <main className="flex-1 overflow-y-auto p-3">
         <div className="w-full mx-auto space-y-3">
@@ -265,6 +343,25 @@ function App() {
                         </span>
                       ))}
                     </div>
+                  </div>
+                )}
+                
+                {msg.role === 'assistant' && !isLoading && idx > 0 && (
+                  <div className="mt-2 pt-2 border-t border-gray-100 flex justify-end space-x-2">
+                    <button 
+                      onClick={() => handleFeedback(idx, 'up')}
+                      className={`p-1 rounded hover:bg-gray-100 transition-colors ${msg.feedback === 'up' ? 'text-green-600' : 'text-gray-400'}`}
+                      title="Helpful response"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14 10h4.764a2 2 0 011.789 2.894l-3.5 7A2 2 0 0115.263 21h-4.017c-.163 0-.326-.02-.485-.06L7 20m7-10V5a2 2 0 00-2-2h-.095c-.5 0-.905.405-.905.905 0 .714-.211 1.412-.608 2.006L7 11v9m7-10h-2M7 20H5a2 2 0 01-2-2v-6a2 2 0 012-2h2.5"></path></svg>
+                    </button>
+                    <button 
+                      onClick={() => handleFeedback(idx, 'down')}
+                      className={`p-1 rounded hover:bg-gray-100 transition-colors ${msg.feedback === 'down' ? 'text-red-600' : 'text-gray-400'}`}
+                      title="Not helpful"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 14H5.236a2 2 0 01-1.789-2.894l3.5-7A2 2 0 018.736 3h4.018a2 2 0 01.485.06l3.76.94m-7 10v5a2 2 0 002 2h.096c.5 0 .905-.405.905-.904 0-.714.211-1.412.608-2.006L17 13V4m-7 10h2m5-10h2a2 2 0 012 2v6a2 2 0 01-2 2h-2.5"></path></svg>
+                    </button>
                   </div>
                 )}
               </div>

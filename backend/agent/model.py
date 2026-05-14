@@ -1,12 +1,22 @@
 import os
 from typing import Generator
+import uuid
+import mlflow
+from mlflow.pyfunc import ResponsesAgent
+from mlflow.types.responses import (
+    ResponsesAgentRequest,
+    ResponsesAgentResponse,
+    ResponsesAgentStreamEvent,
+    output_to_responses_items_stream,
+    to_chat_completions_input,
+)
 from backend.agent.config import CATALOG_SCHEMA, MAX_TOKENS, LLM_MODEL_NAME
 
-class SupplyChainLangGraphAgent:
+class SupplyChainLangGraphAgent(ResponsesAgent):
     def __init__(self):
         self.agent = None
 
-    def load_context(self, context=None):
+    def load_context(self, context=None, user_token=None):
         import os
         from databricks.sdk import WorkspaceClient
         from langchain_openai import ChatOpenAI
@@ -15,10 +25,13 @@ class SupplyChainLangGraphAgent:
         
         # Initialize Databricks SDK
         is_app = bool(os.environ.get("DATABRICKS_APP_NAME"))
-        if is_app:
+        if user_token:
+            # Use On-Behalf-Of (OBO) authentication
+            self.w = WorkspaceClient(token=user_token, auth_type="pat")
+        elif is_app:
             self.w = WorkspaceClient()
         else:
-            profile = os.getenv("DATABRICKS_PROFILE")
+            profile = os.getenv("DATABRICKS_PROFILE", "myenv")
             self.w = WorkspaceClient(profile=profile)
         
         # Get authentication token and host
@@ -32,12 +45,11 @@ class SupplyChainLangGraphAgent:
         if is_app and host and not host.startswith("http"):
             host = f"https://{host}"
         
-        # Create Langchain LLM pointing to Databricks Foundation Model Serving
+        # Create Langchain LLM pointing to Databricks Foundation Model Serving / AI Gateway Route
         llm = ChatOpenAI(
-            model=LLM_MODEL_NAME,
+            model=LLM_MODEL_NAME, # This should be the AI Gateway route name (e.g. supply-chain-agent-endpoint)
             api_key=token,
             base_url=f"{host}/serving-endpoints",
-            max_tokens=MAX_TOKENS,
             streaming=True # Enable streaming on the LLM client
         )
         
@@ -56,62 +68,40 @@ class SupplyChainLangGraphAgent:
             system_prompt = "You are a helpful supply chain AI agent."
         
         # Get Skills
-        system_prompt += discover_skills()
+        system_prompt += discover_skills(w=self.w)
         
         # Get Tools
-        tools = get_langchain_tools()
+        tools = get_langchain_tools(w=self.w)
         
         # Create the LangGraph agent
         self.agent = create_agent(llm, tools, system_prompt=system_prompt)
 
-    def prep_msgs_for_llm(self, messages):
-        """Convert MLflow input messages to Langchain format."""
-        langchain_msgs = []
-        for msg in messages:
-            # Langchain expects role and content
-            langchain_msgs.append({
-                "role": msg.get("role", "user"),
-                "content": msg.get("content", "")
-            })
-        return langchain_msgs
+    def predict(self, request: ResponsesAgentRequest) -> ResponsesAgentResponse:
+        outputs = [
+            event.item
+            for event in self.predict_stream(request)
+            if event.type == "response.output_item.done"
+        ]
+        return ResponsesAgentResponse(output=outputs, custom_outputs=request.custom_inputs)
 
     def predict_stream(
-        self, request
-    ):
-        import uuid
+        self, request: ResponsesAgentRequest
+    ) -> Generator[ResponsesAgentStreamEvent, None, None]:
+        # Convert MLflow input messages to Langchain format
+        cc_msgs = to_chat_completions_input([i.model_dump() for i in request.input])
         
-        # Get input messages
-        if isinstance(request, dict) and "input" in request:
-            raw_input = request["input"]
-        else:
-            raw_input = getattr(request, 'input', request)
+        session_id = "default_thread"
+        if request.custom_inputs and "session_id" in request.custom_inputs:
+            session_id = request.custom_inputs["session_id"]
             
-        # Parse inputs
-        parsed_msgs = []
-        for i in raw_input:
-            if isinstance(i, dict):
-                parsed_msgs.append(i)
-            elif hasattr(i, 'model_dump'):
-                parsed_msgs.append(i.model_dump())
-            else:
-                # Fallback if it's some other object or just a string
-                parsed_msgs.append({"role": "user", "content": str(i)})
-                
-        messages = self.prep_msgs_for_llm(parsed_msgs)
-        input_len = len(messages)
+        config = {"configurable": {"thread_id": session_id}}
         
         item_id = str(uuid.uuid4())
         aggregated_stream = ""
         tool_calls_executed = []
         
         # Stream events from LangGraph
-        config = {"configurable": {"thread_id": "default_thread"}}
-        if hasattr(request, "custom_inputs") and request.custom_inputs:
-            config = {"configurable": {"thread_id": request.custom_inputs.get("session_id", "default_thread")}}
-        elif isinstance(request, dict) and "custom_inputs" in request:
-            config = {"configurable": {"thread_id": request["custom_inputs"].get("session_id", "default_thread")}}
-            
-        for event in self.agent.stream({"messages": messages}, stream_mode="messages", config=config):
+        for event in self.agent.stream({"messages": cc_msgs}, stream_mode="messages", config=config):
             msg = event[0]
             
             # We ONLY want to stream AI generated text to the user, not tool results or human messages.
@@ -143,53 +133,47 @@ class SupplyChainLangGraphAgent:
                 continue
                 
             if chunk:
-                # Some implementations stream the *entire* message over and over again with the new character appended
                 if len(chunk) > len(aggregated_stream) and chunk.startswith(aggregated_stream):
                     new_delta = chunk[len(aggregated_stream):]
                     if new_delta:
                         aggregated_stream = chunk
-                        yield {
-                            "type": "response.output_text.delta",
-                            "delta": new_delta,
-                            "item_id": item_id
-                        }
+                        yield ResponsesAgentStreamEvent(
+                            **self.create_text_delta(delta=new_delta, item_id=item_id)
+                        )
                 elif chunk == aggregated_stream:
-                    # Duplicate payload, ignore
                     pass
                 elif len(aggregated_stream) > 0 and aggregated_stream.startswith(chunk):
-                    # Out of order or partial chunk, ignore
                     pass
-                # Otherwise, it's a standard additive delta
                 else:
-                    yield {
-                        "type": "response.output_text.delta",
-                        "delta": chunk,
-                        "item_id": item_id
-                    }
+                    yield ResponsesAgentStreamEvent(
+                        **self.create_text_delta(delta=chunk, item_id=item_id)
+                    )
                     aggregated_stream += chunk
                     
-        # Ensure we always yield at least ONE event if nothing was yielded so we don't get a 404 or hung stream
-        if not aggregated_stream:
-            # Send an empty string since yielding literal spaces might cause that weird white box
-            pass
-            
-        # We want to filter out any skill leakage that somehow made its way into the final stream
-        # If the LLM just printed out <system_instruction> tags, try to hide them
+        import re
         if "<read_skill_result>" in aggregated_stream:
-            import re
             aggregated_stream = re.sub(r'<read_skill_result>.*?</read_skill_result>', '', aggregated_stream, flags=re.DOTALL)
             
-        yield {
-            "type": "response.output_item.done",
-            "item": {
-                "text": aggregated_stream,
-                "id": item_id
-            },
-            "custom_outputs": {"tool_calls": tool_calls_executed}
-        }
+        yield ResponsesAgentStreamEvent(
+            type="response.output_item.done",
+            item=self.create_text_output_item(
+                text=aggregated_stream,
+                id=item_id
+            ),
+            custom_outputs={"tool_calls": tool_calls_executed}
+        )
 
 def log_agent_model():
-    pass
+    import mlflow
+    mlflow.langchain.autolog()
+    
+    with mlflow.start_run():
+        logged_agent_info = mlflow.pyfunc.log_model(
+            python_model="backend/agent/model.py",
+            name="supply-chain-agent",
+            artifacts={"prompt": "backend/agent/prompt.md"}
+        )
+        return logged_agent_info
 
 if __name__ == "__main__":
     pass

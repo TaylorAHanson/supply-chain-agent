@@ -4,7 +4,7 @@ import pandas as pd
 import io
 from databricks.sdk import WorkspaceClient
 
-def manage_safety_stock(instruction: str, file_name: str = None, dry_run: bool = True) -> str:
+def manage_safety_stock(instruction: str, file_name: str = None, dry_run: bool = True, user_confirmation: str = None) -> str:
     """
     Manage the safety_stock table. 
     IMPORTANT: BEFORE using this tool, you MUST use the `read_skill` tool to read the `analyze_safety_stock` skill to understand the correct workflow.
@@ -12,11 +12,14 @@ def manage_safety_stock(instruction: str, file_name: str = None, dry_run: bool =
     Use this tool to analyze uploaded files or apply instructions to the safety stock table.
     - If a user uploads a file, pass the file_name to process it.
     - Set dry_run=True first to get the delta of what will change (rows added, updated, deleted) and review with the customer.
-    - Once the customer approves, set dry_run=False to actually commit the changes to the table.
+    - Once the customer approves, set dry_run=False AND pass the exact text of the user's approval in user_confirmation to actually commit the changes to the table.
     """
     # Simple check to make sure the agent is providing something
     if not file_name and not instruction:
         return "Error: You must provide either a file_name or an instruction."
+        
+    if not dry_run and not user_confirmation:
+        return "Error: Human-in-the-Loop enforcement. You must provide the exact text of the user's approval in the 'user_confirmation' parameter when dry_run=False."
         
     try:
         from backend.agent.config import CATALOG_SCHEMA

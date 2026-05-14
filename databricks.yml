@@ -1,0 +1,72 @@
+bundle:
+  name: supply-chain-agent
+
+workspace:
+  host: ${workspace.host}
+
+targets:
+  dev:
+    default: true
+    workspace:
+      host: https://fevm-taylor-hanson-build.cloud.databricks.com
+  prod:
+    workspace:
+      host: https://fevm-taylor-hanson-build.cloud.databricks.com
+
+resources:
+  apps:
+    supply_chain_agent:
+      name: supply-chain-agent-v3
+      source_code_path: .
+      user_api_scopes:
+        - "model-serving"
+      resources:
+        - name: ai_gateway_endpoint
+          serving_endpoint:
+            name: supply_chain_agent_endpoint
+            permission: CAN_QUERY
+      config:
+        command:
+          - "python"
+          - "-m"
+          - "uvicorn"
+          - "backend.app:app"
+          - "--host"
+          - "0.0.0.0"
+          - "--port"
+          - "8000"
+          - "--loop"
+          - "asyncio"
+        env:
+          - name: CATALOG_SCHEMA
+            value: "taylor_hanson_build_catalog.supply_chain_schema"
+          - name: LLM_MODEL_NAME
+            value: "supply_chain_agent_endpoint"
+          - name: MAX_TOKENS
+            value: "16384"
+          - name: MAX_ITERATIONS
+            value: "10"
+          - name: SKILLS_VOLUME_PATH
+            value: "/Volumes/taylor_hanson_build_catalog/supply_chain_schema/skills"
+          - name: DATABRICKS_WAREHOUSE_ID
+            value: "238e4114cdfd555f"
+          - name: MLFLOW_EXPERIMENT_NAME
+            value: "/Shared/supply_chain_agent"
+
+  jobs:
+    llm_judge_evaluator:
+      name: "Supply Chain Agent - LLM Judge Evaluator"
+      environments:
+        - environment_key: default
+          spec:
+            client: "1"
+            dependencies:
+              - "mlflow>=2.11.0"
+      tasks:
+        - task_key: evaluate_traces
+          environment_key: default
+          notebook_task:
+            notebook_path: ./evals/run_llm_judge.py
+      schedule:
+        quartz_cron_expression: "0 0 2 * * ?" # Run daily at 2 AM
+        timezone_id: "UTC"
