@@ -182,7 +182,11 @@ async def get_tools_and_skills(req_obj: Request):
             
     try:
         if user_token:
-            w = WorkspaceClient(host=os.getenv("DATABRICKS_HOST"), token=user_token)
+            w = WorkspaceClient(
+                host=os.getenv("DATABRICKS_HOST"), 
+                token=user_token,
+                auth_type="pat"
+            )
         else:
             w = shared_w
             

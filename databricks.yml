@@ -20,6 +20,8 @@ resources:
       source_code_path: .
       user_api_scopes:
         - "model-serving"
+        - "sql"
+        - "files"
       resources:
         - name: ai_gateway_endpoint
           serving_endpoint:
