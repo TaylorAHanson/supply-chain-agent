@@ -46,10 +46,11 @@ class SupplyChainLangGraphAgent(ResponsesAgent):
             host = f"https://{host}"
         
         # Create Langchain LLM pointing to Databricks Foundation Model Serving / AI Gateway Route
+        base_url = f"{host}/ai-gateway/mlflow/v1" if "gateway" in LLM_MODEL_NAME or "endpoint" in LLM_MODEL_NAME else f"{host}/serving-endpoints"
         llm = ChatOpenAI(
             model=LLM_MODEL_NAME, # This should be the AI Gateway route name (e.g. supply-chain-agent-endpoint)
             api_key=token,
-            base_url=f"{host}/serving-endpoints",
+            base_url=base_url,
             streaming=True # Enable streaming on the LLM client
         )
         

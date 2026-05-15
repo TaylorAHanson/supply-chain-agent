@@ -100,13 +100,17 @@ def get_langchain_tools(w=None):
                 w = WorkspaceClient(profile=profile)
                 
         # Dynamically discover tools the user has access to
-        from backend.agent.config import DATABRICKS_WAREHOUSE_ID
+        from backend.agent.config import DATABRICKS_WAREHOUSE_ID, CATALOG_SCHEMA
+        catalog = CATALOG_SCHEMA.split('.')[0]
+        schema = CATALOG_SCHEMA.split('.')[1]
         func_names = []
         try:
-            query_tools = """
+            query_tools = f"""
             SELECT routine_catalog, routine_schema, routine_name 
             FROM system.information_schema.routines 
-            WHERE routine_type = 'FUNCTION' AND routine_catalog != 'system'
+            WHERE routine_type = 'FUNCTION' 
+            AND routine_catalog = '{catalog}'
+            AND routine_schema = '{schema}'
             """
             response_tools = w.statement_execution.execute_statement(
                 statement=query_tools,
@@ -114,8 +118,9 @@ def get_langchain_tools(w=None):
                 wait_timeout="30s"
             )
             if response_tools.status.state.value == 'SUCCEEDED':
-                for row in response_tools.result.data_array:
-                    func_names.append(f"{row[0]}.{row[1]}.{row[2]}")
+                if response_tools.result.data_array:
+                    for row in response_tools.result.data_array:
+                        func_names.append(f"{row[0]}.{row[1]}.{row[2]}")
         except Exception as e:
             print(f"Warning: Failed to dynamically discover tools: {e}")
             # Fallback to config schema if dynamic discovery fails
@@ -207,8 +212,9 @@ def discover_skills(w=None):
         
         volume_paths = []
         if response_skills.status.state.value == 'SUCCEEDED':
-            for row in response_skills.result.data_array:
-                volume_paths.append(f"/Volumes/{row[0]}/{row[1]}/{row[2]}")
+            if response_skills.result.data_array:
+                for row in response_skills.result.data_array:
+                    volume_paths.append(f"/Volumes/{row[0]}/{row[1]}/{row[2]}")
         else:
             # Fallback to config path
             volume_paths.append(SKILLS_VOLUME_PATH)
