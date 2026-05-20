@@ -22,6 +22,7 @@ resources:
         - "model-serving"
         - "sql"
         - "files"
+        - "ai-gateway"
       config:
         command:
           - "python"

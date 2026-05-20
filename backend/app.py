@@ -206,7 +206,7 @@ async def get_tools_and_skills(req_obj: Request):
             warehouse_id=DATABRICKS_WAREHOUSE_ID,
             wait_timeout="30s"
         )
-        if response_tools.status.state.value == 'SUCCEEDED':
+        if response_tools.status.state.value == 'SUCCEEDED' and response_tools.result.data_array:
             for row in response_tools.result.data_array:
                 tools.append(f"{row[0]}.{row[1]}.{row[2]}")
                 
@@ -222,7 +222,7 @@ async def get_tools_and_skills(req_obj: Request):
             wait_timeout="30s"
         )
         
-        if response_skills.status.state.value == 'SUCCEEDED':
+        if response_skills.status.state.value == 'SUCCEEDED' and response_skills.result.data_array:
             for row in response_skills.result.data_array:
                 volume_path = f"/Volumes/{row[0]}/{row[1]}/{row[2]}"
                 try:

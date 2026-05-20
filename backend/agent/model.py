@@ -51,7 +51,7 @@ class SupplyChainLangGraphAgent(ResponsesAgent):
             model=LLM_MODEL_NAME, # This should be the AI Gateway route name (e.g. supply-chain-agent-endpoint)
             api_key=token,
             base_url=base_url,
-            streaming=True # Enable streaming on the LLM client
+            streaming=False # AI Gateway with Output Guardrails does not support streaming
         )
         
         # Build System Prompt
@@ -101,59 +101,41 @@ class SupplyChainLangGraphAgent(ResponsesAgent):
         aggregated_stream = ""
         tool_calls_executed = []
         
-        # Stream events from LangGraph
-        for event in self.agent.stream({"messages": cc_msgs}, stream_mode="messages", config=config):
-            msg = event[0]
-            
-            # We ONLY want to stream AI generated text to the user, not tool results or human messages.
-            if type(msg).__name__ not in ["AIMessageChunk", "AIMessage"]:
-                continue
-                
-            chunk = ""
-            if hasattr(msg, "content"):
-                if isinstance(msg.content, str):
-                    chunk = msg.content
-                elif isinstance(msg.content, list) and len(msg.content) > 0:
-                    chunk_dict = msg.content[0]
+        # AI Gateway with Output Guardrails does not support streaming, so we use invoke
+        result = self.agent.invoke({"messages": cc_msgs}, config=config)
+        
+        # Parse the result
+        for msg in result.get("messages", []):
+            if type(msg).__name__ in ["AIMessage", "AIMessageChunk"]:
+                if hasattr(msg, "tool_calls") and msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        tool_name = tc.get("name", "unknown") if isinstance(tc, dict) else getattr(tc, "name", "unknown")
+                        if tool_name and tool_name.strip() != "":
+                            if not any(t["tool_name"] == tool_name for t in tool_calls_executed):
+                                tool_calls_executed.append({"tool_name": tool_name, "status": "executed inside agent"})
+        
+        last_msg = result.get("messages", [])[-1] if result.get("messages") else None
+        
+        if last_msg and type(last_msg).__name__ in ["AIMessage", "AIMessageChunk"]:
+            if hasattr(last_msg, "content"):
+                if isinstance(last_msg.content, str):
+                    aggregated_stream = last_msg.content
+                elif isinstance(last_msg.content, list) and len(last_msg.content) > 0:
+                    chunk_dict = last_msg.content[0]
                     if isinstance(chunk_dict, dict) and "text" in chunk_dict:
-                        chunk = chunk_dict["text"]
+                        aggregated_stream = chunk_dict["text"]
                     elif isinstance(chunk_dict, str):
-                        chunk = chunk_dict
-                            
-            # Some tool call messages incorrectly pass the tool content or instructions back to stream
-            if hasattr(msg, "tool_calls") and msg.tool_calls:
-                for tc in msg.tool_calls:
-                    tool_name = tc.get("name", "unknown") if isinstance(tc, dict) else getattr(tc, "name", "unknown")
-                    if tool_name and tool_name.strip() != "":
-                        if not any(t["tool_name"] == tool_name for t in tool_calls_executed):
-                            tool_calls_executed.append({"tool_name": tool_name, "status": "executed inside agent"})
-                continue
-            if hasattr(msg, "tool_call_chunks") and msg.tool_call_chunks:
-                continue
-            if hasattr(msg, "invalid_tool_calls") and msg.invalid_tool_calls:
-                continue
-                
-            if chunk:
-                if len(chunk) > len(aggregated_stream) and chunk.startswith(aggregated_stream):
-                    new_delta = chunk[len(aggregated_stream):]
-                    if new_delta:
-                        aggregated_stream = chunk
-                        yield ResponsesAgentStreamEvent(
-                            **self.create_text_delta(delta=new_delta, item_id=item_id)
-                        )
-                elif chunk == aggregated_stream:
-                    pass
-                elif len(aggregated_stream) > 0 and aggregated_stream.startswith(chunk):
-                    pass
-                else:
-                    yield ResponsesAgentStreamEvent(
-                        **self.create_text_delta(delta=chunk, item_id=item_id)
-                    )
-                    aggregated_stream += chunk
-                    
+                        aggregated_stream = chunk_dict
+        
         import re
         if "<read_skill_result>" in aggregated_stream:
             aggregated_stream = re.sub(r'<read_skill_result>.*?</read_skill_result>', '', aggregated_stream, flags=re.DOTALL)
+            
+        # Yield the whole text as a single delta
+        if aggregated_stream:
+            yield ResponsesAgentStreamEvent(
+                **self.create_text_delta(delta=aggregated_stream, item_id=item_id)
+            )
             
         yield ResponsesAgentStreamEvent(
             type="response.output_item.done",
