@@ -64,6 +64,7 @@ resources:
             client: "1"
             dependencies:
               - "mlflow>=2.11.0"
+              - "tiktoken"
       tasks:
         - task_key: evaluate_traces
           environment_key: default
