@@ -9,24 +9,31 @@
 import os
 import mlflow
 import pandas as pd
-from databricks.sdk import WorkspaceClient
 
 # Get config from env
 experiment_name = os.getenv("MLFLOW_EXPERIMENT_NAME", "/Shared/supply_chain_agent")
 catalog_schema = os.getenv("CATALOG_SCHEMA", "taylor_hanson_build_catalog.supply_chain_schema")
-endpoint_name = os.getenv("LLM_MODEL_NAME", "supply_chain_agent_endpoint")
 
-# 1. Load recent traces from Inference Tables
-w = WorkspaceClient()
-endpoint = w.serving_endpoints.get(endpoint_name)
+# 1. Load recent traces from MLflow experiment
+experiment = mlflow.get_experiment_by_name(experiment_name)
+if experiment is None:
+    raise ValueError(f"Experiment '{experiment_name}' not found.")
 
-if endpoint.config.auto_capture_config is None or endpoint.config.auto_capture_config.state is None:
-    raise ValueError(f"Inference tables are not configured or not ready for endpoint '{endpoint_name}'")
+traces = mlflow.search_traces(
+    experiment_ids=[experiment.experiment_id],
+    max_results=100
+)
 
-inference_table_name = endpoint.config.auto_capture_config.state.payload_table.name
-print(f"Reading traces from inference table: {inference_table_name}")
+print(f"Found {len(traces)} traces from experiment: {experiment_name}")
 
-df_eval = spark.table(inference_table_name).toPandas()
+# Build evaluation DataFrame from traces
+if not traces.empty:
+    df_eval = traces[["request", "response"]].dropna().reset_index(drop=True)
+    df_eval.columns = ["inputs", "response"]
+    print(f"Prepared {len(df_eval)} traces for evaluation")
+else:
+    df_eval = pd.DataFrame()
+    print("No traces found.")
 
 # COMMAND ----------
 
