@@ -75,7 +75,7 @@ def discover_tools():
             
     return schemas, execution_routing
 
-def get_langchain_tools(w=None):
+def get_langchain_tools(w=None, selected_tools=None, user_token=None):
     """
     Discovers all tools dynamically and wraps them as LangChain tools.
     """
@@ -90,7 +90,33 @@ def get_langchain_tools(w=None):
         from backend.agent.config import CATALOG_SCHEMA
         from databricks.sdk import WorkspaceClient
         
-        # Initialize the WorkspaceClient if not provided
+        func_names = []
+        # Check SQLite Cache first
+        import sqlite3
+        import hashlib
+        import json
+        import time
+        
+        token_hash = hashlib.sha256(user_token.encode()).hexdigest() if user_token else "shared"
+        cache_db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'tools_skills_cache.db')
+        
+        cache_hit = False
+        try:
+            if os.path.exists(cache_db_path):
+                conn = sqlite3.connect(cache_db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT tools, timestamp FROM cache WHERE token_hash = ?", (token_hash,))
+                row = cursor.fetchone()
+                
+                if row and (time.time() - row[1]) < 3600:
+                    cached_tools = json.loads(row[0])
+                    func_names = [t["name"] for t in cached_tools]
+                    cache_hit = True
+                conn.close()
+        except Exception as e:
+            print(f"Warning: Tool Cache read error {e}")
+            
+        # Initialize the WorkspaceClient if not provided (needed for execution even if cache hit)
         if w is None:
             is_app = bool(os.environ.get("DATABRICKS_APP_NAME"))
             if is_app:
@@ -99,41 +125,65 @@ def get_langchain_tools(w=None):
                 profile = os.getenv("DATABRICKS_PROFILE", "myenv")
                 w = WorkspaceClient(profile=profile)
                 
-        # Dynamically discover tools the user has access to
-        from backend.agent.config import DATABRICKS_WAREHOUSE_ID, CATALOG_SCHEMA
-        catalog = CATALOG_SCHEMA.split('.')[0]
-        schema = CATALOG_SCHEMA.split('.')[1]
-        func_names = []
-        try:
-            query_tools = f"""
-            SELECT routine_catalog, routine_schema, routine_name 
-            FROM system.information_schema.routines 
-            WHERE routine_type = 'FUNCTION' 
-            AND routine_catalog = '{catalog}'
-            AND routine_schema = '{schema}'
-            """
-            response_tools = w.statement_execution.execute_statement(
-                statement=query_tools,
-                warehouse_id=DATABRICKS_WAREHOUSE_ID,
-                wait_timeout="30s"
-            )
-            if response_tools.status.state.value == 'SUCCEEDED':
-                if response_tools.result.data_array:
-                    for row in response_tools.result.data_array:
-                        func_names.append(f"{row[0]}.{row[1]}.{row[2]}")
-        except Exception as e:
-            print(f"Warning: Failed to dynamically discover tools: {e}")
-            # Fallback to config schema if dynamic discovery fails
-            func_names = [
-                f"{CATALOG_SCHEMA}.get_inventory",
-                f"{CATALOG_SCHEMA}.get_supplier_lead_times",
-                f"{CATALOG_SCHEMA}.draft_purchase_order",
-                f"{CATALOG_SCHEMA}.manage_safety_stock",
-                f"{CATALOG_SCHEMA}.list_genies",
-                f"{CATALOG_SCHEMA}.ask_genie",
-                f"{CATALOG_SCHEMA}.notify_slack_channel",
-                f"{CATALOG_SCHEMA}.get_erp_supplier_status"
-            ]
+        if not cache_hit:
+            # Dynamically discover tools the user has access to
+            from backend.agent.config import DATABRICKS_WAREHOUSE_ID, CATALOG_SCHEMA
+            
+            # Guard against undefined CATALOG_SCHEMA
+            if CATALOG_SCHEMA:
+                catalog = CATALOG_SCHEMA.split('.')[0]
+                schema = CATALOG_SCHEMA.split('.')[1]
+            else:
+                catalog, schema = "system", "information_schema"
+                
+            try:
+                query_tools = f"""
+                SELECT routine_catalog, routine_schema, routine_name 
+                FROM system.information_schema.routines 
+                WHERE routine_type = 'FUNCTION' 
+                AND routine_catalog = '{catalog}'
+                AND routine_schema = '{schema}'
+                """
+                response_tools = w.statement_execution.execute_statement(
+                    statement=query_tools,
+                    warehouse_id=DATABRICKS_WAREHOUSE_ID,
+                    wait_timeout="30s"
+                )
+                if response_tools.status.state.value == 'SUCCEEDED':
+                    if response_tools.result.data_array:
+                        for row in response_tools.result.data_array:
+                            func_names.append(f"{row[0]}.{row[1]}.{row[2]}")
+            except Exception as e:
+                print(f"Warning: Failed to dynamically discover tools: {e}")
+                # Fallback to config schema if dynamic discovery fails
+                default_catalog = CATALOG_SCHEMA if CATALOG_SCHEMA else "default.default"
+                func_names = [
+                    f"{default_catalog}.get_inventory",
+                    f"{default_catalog}.get_supplier_lead_times",
+                    f"{default_catalog}.draft_purchase_order",
+                    f"{default_catalog}.manage_safety_stock",
+                    f"{default_catalog}.list_genies",
+                    f"{default_catalog}.ask_genie",
+                    f"{default_catalog}.notify_slack_channel",
+                    f"{default_catalog}.get_erp_supplier_status"
+                ]
+            
+        # Save to cache if not already populated by the endpoint
+        if not cache_hit:
+            try:
+                conn = sqlite3.connect(cache_db_path)
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT OR REPLACE INTO cache (token_hash, tools, skills, timestamp) VALUES (?, ?, ?, ?)",
+                    (token_hash, json.dumps([{"name": f, "type": "UC Function"} for f in func_names]), json.dumps([]), time.time())
+                )
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                print(f"Warning: Failed to save to cache {e}")
+            
+        if selected_tools is not None:
+            func_names = [f for f in func_names if f in selected_tools]
             
         # Set the default client for Unity Catalog
         try:
@@ -142,21 +192,33 @@ def get_langchain_tools(w=None):
             
             uc_client = DatabricksFunctionClient(client=w)
             set_uc_function_client(uc_client)
+            
+            # Use **kwargs to avoid passing unexpected kwargs if the class signature has changed
+            toolkit_kwargs = {"function_names": func_names}
+            
+            # Check if the client arg is accepted
+            import inspect
+            sig = inspect.signature(UCFunctionToolkit.__init__)
+            if "client" in sig.parameters:
+                toolkit_kwargs["client"] = uc_client
+                
+            toolkit = UCFunctionToolkit(**toolkit_kwargs)
         except ImportError:
             # unitycatalog-ai <= 0.3.x compatibility
             try:
                 from databricks_langchain.uc_function_toolkit import set_uc_function_client
                 set_uc_function_client(w)
+                toolkit = UCFunctionToolkit(function_names=func_names)
             except ImportError:
-                pass
+                toolkit = UCFunctionToolkit(function_names=func_names)
             
-        toolkit = UCFunctionToolkit(function_names=func_names)
         langchain_tools.extend(toolkit.tools)
     except Exception as e:
         print(f"Warning: Failed to load UC tools: {e}")
         print("Falling back to local Python tools...")
         import pkgutil
         import importlib
+        import inspect
         import backend.tools.mcp
         
         for _, module_name, _ in pkgutil.iter_modules(backend.tools.mcp.__path__):
@@ -172,7 +234,7 @@ def get_langchain_tools(w=None):
                 
     return langchain_tools
 
-def discover_skills(w=None):
+def discover_skills(w=None, selected_skills=None, user_token=None):
     """
     Discovers all skills dynamically from the Unity Catalog volume.
     Returns a string formatted for the system prompt.
@@ -186,10 +248,35 @@ def discover_skills(w=None):
         # If we're in Databricks Apps, we can just read from the FUSE mount directly
         is_app = bool(os.environ.get("DATABRICKS_APP_NAME"))
         
-        # We will dynamically discover skills across all catalogs/schemas the user has access to
-        from backend.agent.config import DATABRICKS_WAREHOUSE_ID
+        # Check SQLite Cache first
+        import sqlite3
+        import hashlib
+        import json
+        import time
         
-        # Initialize the WorkspaceClient if not provided
+        token_hash = hashlib.sha256(user_token.encode()).hexdigest() if user_token else "shared"
+        cache_db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'tools_skills_cache.db')
+        
+        cache_hit = False
+        volume_paths = []
+        try:
+            if os.path.exists(cache_db_path):
+                conn = sqlite3.connect(cache_db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT skills, timestamp FROM cache WHERE token_hash = ?", (token_hash,))
+                row = cursor.fetchone()
+                
+                if row and (time.time() - row[1]) < 3600:
+                    # If we have cache hit, we don't need to do the discovery steps below,
+                    # but since the cache only gives us the list of skill names, not their raw paths,
+                    # we still need to just use the default volume path to read from
+                    volume_paths = [SKILLS_VOLUME_PATH]
+                    cache_hit = True
+                conn.close()
+        except Exception as e:
+            print(f"Warning: Skill Cache read error {e}")
+            
+        # Initialize the WorkspaceClient if not provided (needed for execution even if cache hit)
         if w is None:
             from databricks.sdk import WorkspaceClient
             if is_app:
@@ -198,32 +285,37 @@ def discover_skills(w=None):
                 profile = os.getenv("DATABRICKS_PROFILE", "myenv")
                 w = WorkspaceClient(profile=profile)
                 
-        # Query for skills (volumes named 'skills')
-        query_skills = """
-        SELECT volume_catalog, volume_schema, volume_name 
-        FROM system.information_schema.volumes
-        WHERE volume_name = 'skills'
-        """
-        response_skills = w.statement_execution.execute_statement(
-            statement=query_skills,
-            warehouse_id=DATABRICKS_WAREHOUSE_ID,
-            wait_timeout="30s"
-        )
-        
-        volume_paths = []
-        if response_skills.status.state.value == 'SUCCEEDED':
-            if response_skills.result.data_array:
-                for row in response_skills.result.data_array:
-                    volume_paths.append(f"/Volumes/{row[0]}/{row[1]}/{row[2]}")
-        else:
-            # Fallback to config path
-            volume_paths.append(SKILLS_VOLUME_PATH)
+        if not cache_hit:
+            # We will dynamically discover skills across all catalogs/schemas the user has access to
+            from backend.agent.config import DATABRICKS_WAREHOUSE_ID
+            
+            # Query for skills (volumes named 'skills')
+            query_skills = """
+            SELECT volume_catalog, volume_schema, volume_name 
+            FROM system.information_schema.volumes
+            WHERE volume_name = 'skills'
+            """
+            response_skills = w.statement_execution.execute_statement(
+                statement=query_skills,
+                warehouse_id=DATABRICKS_WAREHOUSE_ID,
+                wait_timeout="30s"
+            )
+            
+            if response_skills.status.state.value == 'SUCCEEDED':
+                if response_skills.result.data_array:
+                    for row in response_skills.result.data_array:
+                        volume_paths.append(f"/Volumes/{row[0]}/{row[1]}/{row[2]}")
+            else:
+                # Fallback to config path
+                volume_paths.append(SKILLS_VOLUME_PATH)
             
         for volume_path in volume_paths:
             if is_app and os.path.exists(volume_path):
                 for filename in os.listdir(volume_path):
                     if filename.endswith(".md"):
                         skill_name = filename[:-3]
+                        if selected_skills is not None and skill_name not in selected_skills:
+                            continue
                         filepath = os.path.join(volume_path, filename)
                         
                         description = "No description provided."
@@ -249,6 +341,8 @@ def discover_skills(w=None):
                         if file_info.path.endswith(".md"):
                             filename = os.path.basename(file_info.path)
                             skill_name = filename[:-3]
+                            if selected_skills is not None and skill_name not in selected_skills:
+                                continue
                             
                             description = "No description provided."
                             try:

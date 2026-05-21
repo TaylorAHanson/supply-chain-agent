@@ -16,7 +16,7 @@ class SupplyChainLangGraphAgent(ResponsesAgent):
     def __init__(self):
         self.agent = None
 
-    def load_context(self, context=None, user_token=None):
+    def load_context(self, context=None, user_token=None, selected_tools=None, selected_skills=None):
         import os
         from databricks.sdk import WorkspaceClient
         from langchain_openai import ChatOpenAI
@@ -69,10 +69,10 @@ class SupplyChainLangGraphAgent(ResponsesAgent):
             system_prompt = "You are a helpful supply chain AI agent."
         
         # Get Skills
-        system_prompt += discover_skills(w=self.w)
+        system_prompt += discover_skills(w=self.w, selected_skills=selected_skills, user_token=user_token)
         
         # Get Tools
-        tools = get_langchain_tools(w=self.w)
+        tools = get_langchain_tools(w=self.w, selected_tools=selected_tools, user_token=user_token)
         
         # Create the LangGraph agent
         self.agent = create_agent(llm, tools, system_prompt=system_prompt)
@@ -88,63 +88,86 @@ class SupplyChainLangGraphAgent(ResponsesAgent):
     def predict_stream(
         self, request: ResponsesAgentRequest
     ) -> Generator[ResponsesAgentStreamEvent, None, None]:
-        # Convert MLflow input messages to Langchain format
-        cc_msgs = to_chat_completions_input([i.model_dump() for i in request.input])
         
-        session_id = "default_thread"
-        if request.custom_inputs and "session_id" in request.custom_inputs:
-            session_id = request.custom_inputs["session_id"]
+        # Start a local MLflow trace explicitly if one isn't active
+        local_trace = None
+        try:
+            active_trace = mlflow.get_last_active_trace()
+            if not active_trace:
+                local_trace = mlflow.start_trace(name="agent_predict")
+        except Exception:
+            pass
             
-        config = {"configurable": {"thread_id": session_id}}
-        
-        item_id = str(uuid.uuid4())
-        aggregated_stream = ""
-        tool_calls_executed = []
-        
-        # AI Gateway with Output Guardrails does not support streaming, so we use invoke
-        result = self.agent.invoke({"messages": cc_msgs}, config=config)
-        
-        # Parse the result
-        for msg in result.get("messages", []):
-            if type(msg).__name__ in ["AIMessage", "AIMessageChunk"]:
-                if hasattr(msg, "tool_calls") and msg.tool_calls:
-                    for tc in msg.tool_calls:
-                        tool_name = tc.get("name", "unknown") if isinstance(tc, dict) else getattr(tc, "name", "unknown")
-                        if tool_name and tool_name.strip() != "":
-                            if not any(t["tool_name"] == tool_name for t in tool_calls_executed):
-                                tool_calls_executed.append({"tool_name": tool_name, "status": "executed inside agent"})
-        
-        last_msg = result.get("messages", [])[-1] if result.get("messages") else None
-        
-        if last_msg and type(last_msg).__name__ in ["AIMessage", "AIMessageChunk"]:
-            if hasattr(last_msg, "content"):
-                if isinstance(last_msg.content, str):
-                    aggregated_stream = last_msg.content
-                elif isinstance(last_msg.content, list) and len(last_msg.content) > 0:
-                    chunk_dict = last_msg.content[0]
-                    if isinstance(chunk_dict, dict) and "text" in chunk_dict:
-                        aggregated_stream = chunk_dict["text"]
-                    elif isinstance(chunk_dict, str):
-                        aggregated_stream = chunk_dict
-        
-        import re
-        if "<read_skill_result>" in aggregated_stream:
-            aggregated_stream = re.sub(r'<read_skill_result>.*?</read_skill_result>', '', aggregated_stream, flags=re.DOTALL)
+        try:
+            # Convert MLflow input messages to Langchain format
+            cc_msgs = to_chat_completions_input([i.model_dump() for i in request.input])
             
-        # Yield the whole text as a single delta
-        if aggregated_stream:
+            session_id = "default_thread"
+            if request.custom_inputs and "session_id" in request.custom_inputs:
+                session_id = request.custom_inputs["session_id"]
+                
+            config = {"configurable": {"thread_id": session_id}}
+            
+            item_id = str(uuid.uuid4())
+            aggregated_stream = ""
+            tool_calls_executed = []
+            
+            # AI Gateway with Output Guardrails does not support streaming, so we use invoke
+            result = self.agent.invoke({"messages": cc_msgs}, config=config)
+            
+            # Parse the result
+            for msg in result.get("messages", []):
+                if type(msg).__name__ in ["AIMessage", "AIMessageChunk"]:
+                    if hasattr(msg, "tool_calls") and msg.tool_calls:
+                        for tc in msg.tool_calls:
+                            tool_name = tc.get("name", "unknown") if isinstance(tc, dict) else getattr(tc, "name", "unknown")
+                            if tool_name and tool_name.strip() != "":
+                                if not any(t["tool_name"] == tool_name for t in tool_calls_executed):
+                                    tool_calls_executed.append({"tool_name": tool_name, "status": "executed inside agent"})
+            
+            last_msg = result.get("messages", [])[-1] if result.get("messages") else None
+            
+            if last_msg and type(last_msg).__name__ in ["AIMessage", "AIMessageChunk"]:
+                if hasattr(last_msg, "content"):
+                    if isinstance(last_msg.content, str):
+                        aggregated_stream = last_msg.content
+                    elif isinstance(last_msg.content, list) and len(last_msg.content) > 0:
+                        chunk_dict = last_msg.content[0]
+                        if isinstance(chunk_dict, dict) and "text" in chunk_dict:
+                            aggregated_stream = chunk_dict["text"]
+                        elif isinstance(chunk_dict, str):
+                            aggregated_stream = chunk_dict
+            
+            import re
+            if "<read_skill_result>" in aggregated_stream:
+                aggregated_stream = re.sub(r'<read_skill_result>.*?</read_skill_result>', '', aggregated_stream, flags=re.DOTALL)
+                
+            # Clean up any raw tool call XML tags the LLM might have leaked into the output
+            aggregated_stream = re.sub(r'<tool_call>.*?</tool_call>', '', aggregated_stream, flags=re.DOTALL)
+            aggregated_stream = re.sub(r'<tool_response>.*?</tool_response>', '', aggregated_stream, flags=re.DOTALL)
+            aggregated_stream = aggregated_stream.replace('<tool_response>', '').strip()
+                
+            # Yield the whole text as a single delta
+            if aggregated_stream:
+                yield ResponsesAgentStreamEvent(
+                    **self.create_text_delta(delta=aggregated_stream, item_id=item_id)
+                )
+                
             yield ResponsesAgentStreamEvent(
-                **self.create_text_delta(delta=aggregated_stream, item_id=item_id)
+                type="response.output_item.done",
+                item=self.create_text_output_item(
+                    text=aggregated_stream,
+                    id=item_id
+                ),
+                custom_outputs={"tool_calls": tool_calls_executed}
             )
             
-        yield ResponsesAgentStreamEvent(
-            type="response.output_item.done",
-            item=self.create_text_output_item(
-                text=aggregated_stream,
-                id=item_id
-            ),
-            custom_outputs={"tool_calls": tool_calls_executed}
-        )
+        finally:
+            if local_trace:
+                try:
+                    mlflow.end_trace(status="OK")
+                except Exception:
+                    pass
 
 def log_agent_model():
     import mlflow

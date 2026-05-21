@@ -7,9 +7,9 @@ if [[ -z "${DATABRICKS_PROFILE}" ]]; then
     echo "Available Databricks profiles:"
     databricks auth profiles 2>/dev/null | grep -v 'Warning' || cat ~/.databrickscfg | grep '\[' | tr -d '[]' | sed 's/^/  - /'
     echo ""
-    echo "Please enter the Databricks CLI profile to use (default: DEFAULT):"
+    echo "Please enter the Databricks CLI profile to use (default: myenv):"
     read -p "> " input_profile
-    export DATABRICKS_PROFILE=${input_profile:-"DEFAULT"}
+    export DATABRICKS_PROFILE=${input_profile:-"myenv"}
 fi
 
 echo "Using profile: $DATABRICKS_PROFILE"

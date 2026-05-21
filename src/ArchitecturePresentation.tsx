@@ -87,7 +87,7 @@ const slides = [
               <li className="flex items-start"><span className="text-orange-500 mr-2">•</span> Native SSO & Identity Propagation</li>
               <li className="flex items-start"><span className="text-orange-500 mr-2">•</span> Auto Service Principal Provisioning</li>
               <li className="flex items-start"><span className="text-orange-500 mr-2">•</span> LangGraph State Machine Engine</li>
-              <li className="flex items-start"><span className="text-orange-500 mr-2">•</span> Streaming Server-Sent Events (SSE)</li>
+              <li className="flex items-start"><span className="text-orange-500 mr-2">•</span> FastAPI Server-Sent Events (SSE)</li>
             </ul>
           </div>
           
@@ -103,7 +103,7 @@ const slides = [
               <li className="flex items-start"><span className="text-purple-500 mr-2">•</span> Decoupled Model Routing</li>
               <li className="flex items-start"><span className="text-purple-500 mr-2">•</span> Zero-Downtime A/B Testing</li>
               <li className="flex items-start"><span className="text-purple-500 mr-2">•</span> Input Guardrails (CCI, PII, Jailbreak)</li>
-              <li className="flex items-start"><span className="text-purple-500 mr-2">•</span> Output Guardrails (Hallucination)</li>
+              <li className="flex items-start"><span className="text-purple-500 mr-2">•</span> Sync Output Guardrails (Trade-off: No Streaming)</li>
               <li className="flex items-start"><span className="text-purple-500 mr-2">•</span> Centralized Rate Limits & Costing</li>
             </ul>
           </div>
@@ -230,9 +230,9 @@ const slides = [
             <div>
               <span className="flex items-center font-bold text-[#00205B] text-sm mb-2 uppercase tracking-wide">
                 <svg className="w-5 h-5 mr-2 text-[#3253DC]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
-                Governance & Security
+                Governance & Configuration
               </span>
-              <p className="text-xs text-gray-600 leading-relaxed">Admins control who can execute which tool via standard SQL <code className="bg-gray-100 px-1 rounded">GRANT EXECUTE ON FUNCTION</code> or <code className="bg-gray-100 px-1 rounded">GRANT READ ON VOLUME</code>, eliminating the need to manage API keys in code or duplicate access controls.</p>
+              <p className="text-xs text-gray-600 leading-relaxed">Admins control access via standard SQL <code className="bg-gray-100 px-1 rounded">GRANT EXECUTE ON FUNCTION</code>. They can set default active tools in <code className="bg-gray-100 px-1 rounded">databricks.yml</code>, while users can toggle specific tools on or off in the UI.</p>
             </div>
             <div>
               <span className="flex items-center font-bold text-[#00205B] text-sm mb-2 uppercase tracking-wide">

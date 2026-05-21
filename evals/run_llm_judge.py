@@ -6,17 +6,22 @@
 
 # COMMAND ----------
 
+import os
 import mlflow
 import pandas as pd
 from databricks.sdk import WorkspaceClient
 
+# Get config from env
+experiment_name = os.getenv("MLFLOW_EXPERIMENT_NAME", "/Shared/supply_chain_agent")
+catalog_schema = os.getenv("CATALOG_SCHEMA", "taylor_hanson_build_catalog.supply_chain_schema")
+
 # 1. Load recent traces from Inference Tables
 # In a real scenario, this would read from the configured inference table
-# df = spark.table("taylor_hanson_build_catalog.supply_chain_schema.agent_payload_logs").toPandas()
+# df = spark.table(f"{catalog_schema}.agent_payload_logs").toPandas()
 
 # For demonstration, we'll fetch recent traces using MLflow API
 traces = mlflow.search_traces(
-    experiment_ids=[mlflow.get_experiment_by_name("/Shared/supply-chain-agent-experiment").experiment_id],
+    experiment_ids=[mlflow.get_experiment_by_name(experiment_name).experiment_id],
     max_results=100
 )
 
@@ -62,6 +67,6 @@ with mlflow.start_run(run_name="passive_llm_judge"):
 eval_results_df = results.tables["eval_results_table"]
 
 # spark_df = spark.createDataFrame(eval_results_df)
-# spark_df.write.mode("append").saveAsTable("taylor_hanson_build_catalog.supply_chain_schema.agent_eval_scores")
+# spark_df.write.mode("append").saveAsTable(f"{catalog_schema}.agent_eval_scores")
 
 print("Successfully evaluated traces and saved scores.")

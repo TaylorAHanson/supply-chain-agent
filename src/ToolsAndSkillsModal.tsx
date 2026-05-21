@@ -1,39 +1,38 @@
 import React, { useState, useEffect } from 'react';
 
+interface AvailableTool {
+  name: string;
+  type: string;
+}
+
 interface ToolsAndSkillsModalProps {
   onClose: () => void;
+  availableTools: AvailableTool[];
+  availableSkills: string[];
+  selectedTools: string[];
+  selectedSkills: string[];
+  onToolsChange: (tools: string[]) => void;
+  onSkillsChange: (skills: string[]) => void;
+  isLoading: boolean;
 }
 
 const QC_BLUE = '#3253DC';
 const QC_DARK = '#00205B';
 
-const ToolsAndSkillsModal: React.FC<ToolsAndSkillsModalProps> = ({ onClose }) => {
-  const [tools, setTools] = useState<string[]>([]);
-  const [skills, setSkills] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+const ToolsAndSkillsModal: React.FC<ToolsAndSkillsModalProps> = ({ 
+  onClose,
+  availableTools,
+  availableSkills,
+  selectedTools,
+  selectedSkills,
+  onToolsChange,
+  onSkillsChange,
+  isLoading
+}) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [showExplanation, setShowExplanation] = useState(false);
 
   useEffect(() => {
-    const fetchToolsAndSkills = async () => {
-      try {
-        const response = await fetch('/tools-and-skills');
-        if (!response.ok) {
-          throw new Error('Failed to fetch tools and skills');
-        }
-        const data = await response.json();
-        setTools(data.tools || []);
-        setSkills(data.skills || []);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'An error occurred');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchToolsAndSkills();
-
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         onClose();
@@ -44,8 +43,27 @@ const ToolsAndSkillsModal: React.FC<ToolsAndSkillsModalProps> = ({ onClose }) =>
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
 
-  const filteredTools = tools.filter(t => t.toLowerCase().includes(searchQuery.toLowerCase()));
-  const filteredSkills = skills.filter(s => s.toLowerCase().includes(searchQuery.toLowerCase()));
+  const filteredTools = availableTools.filter(t => 
+    t.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    t.type.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+  const filteredSkills = availableSkills.filter(s => s.toLowerCase().includes(searchQuery.toLowerCase()));
+
+  const handleToolToggle = (tool: string) => {
+    if (selectedTools.includes(tool)) {
+      onToolsChange(selectedTools.filter(t => t !== tool));
+    } else {
+      onToolsChange([...selectedTools, tool]);
+    }
+  };
+
+  const handleSkillToggle = (skill: string) => {
+    if (selectedSkills.includes(skill)) {
+      onSkillsChange(selectedSkills.filter(s => s !== skill));
+    } else {
+      onSkillsChange([...selectedSkills, skill]);
+    }
+  };
 
   return (
     <div className="fixed inset-0 bg-[#00205B]/80 z-50 flex justify-center items-center p-4 sm:p-8 backdrop-blur-md animate-in fade-in duration-300">
@@ -86,13 +104,9 @@ const ToolsAndSkillsModal: React.FC<ToolsAndSkillsModalProps> = ({ onClose }) =>
             />
           </div>
 
-          {loading ? (
+          {isLoading ? (
             <div className="flex-1 flex items-center justify-center">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#3253DC]"></div>
-            </div>
-          ) : error ? (
-            <div className="flex-1 flex items-center justify-center text-red-500">
-              {error}
             </div>
           ) : (
             <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -112,9 +126,24 @@ const ToolsAndSkillsModal: React.FC<ToolsAndSkillsModalProps> = ({ onClose }) =>
                 <div className="flex-1 overflow-y-auto pr-2 space-y-2">
                   {filteredTools.length > 0 ? (
                     filteredTools.map((tool, idx) => (
-                      <div key={idx} className="bg-gray-50 border border-gray-100 rounded-md p-3 hover:border-[#3253DC]/30 transition-colors">
-                        <span className="font-mono text-sm text-gray-800 break-all">{tool}</span>
-                      </div>
+                      <label key={idx} className="flex items-start bg-gray-50 border border-gray-100 rounded-md p-3 hover:border-[#3253DC]/30 transition-colors cursor-pointer">
+                        <div className="flex items-center h-5 mr-3">
+                          <input
+                            type="checkbox"
+                            className="w-4 h-4 text-[#3253DC] bg-white border-gray-300 rounded focus:ring-[#3253DC] focus:ring-2"
+                            checked={selectedTools.includes(tool.name)}
+                            onChange={() => handleToolToggle(tool.name)}
+                          />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="font-mono text-sm text-gray-800 break-all pr-2">{tool.name}</span>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-[#F5F7FF] text-[#3253DC] border border-[#3253DC]/20 shrink-0">
+                              {tool.type}
+                            </span>
+                          </div>
+                        </div>
+                      </label>
                     ))
                   ) : (
                     <p className="text-gray-400 text-sm text-center py-8">No tools found matching your search.</p>
@@ -138,10 +167,18 @@ const ToolsAndSkillsModal: React.FC<ToolsAndSkillsModalProps> = ({ onClose }) =>
                 <div className="flex-1 overflow-y-auto pr-2 space-y-2">
                   {filteredSkills.length > 0 ? (
                     filteredSkills.map((skill, idx) => (
-                      <div key={idx} className="bg-gray-50 border border-gray-100 rounded-md p-3 hover:border-[#3253DC]/30 transition-colors flex items-center">
+                      <label key={idx} className="flex items-center bg-gray-50 border border-gray-100 rounded-md p-3 hover:border-[#3253DC]/30 transition-colors cursor-pointer">
+                        <div className="flex items-center h-5 mr-3">
+                          <input
+                            type="checkbox"
+                            className="w-4 h-4 text-[#3253DC] bg-white border-gray-300 rounded focus:ring-[#3253DC] focus:ring-2"
+                            checked={selectedSkills.includes(skill)}
+                            onChange={() => handleSkillToggle(skill)}
+                          />
+                        </div>
                         <svg className="w-4 h-4 text-[#3253DC] mr-2 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
                         <span className="font-medium text-sm text-gray-800">{skill}</span>
-                      </div>
+                      </label>
                     ))
                   ) : (
                     <p className="text-gray-400 text-sm text-center py-8">No skills found matching your search.</p>

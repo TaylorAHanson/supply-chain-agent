@@ -22,6 +22,11 @@ interface Message {
   feedback?: 'up' | 'down';
 }
 
+interface AvailableTool {
+  name: string;
+  type: string;
+}
+
 function App() {
   const [messages, setMessages] = useState<Message[]>([
     { role: 'assistant', content: 'Hello! I am your Supply Chain AI Agent. How can I help you today?' }
@@ -32,6 +37,12 @@ function App() {
   const [showArchitecture, setShowArchitecture] = useState(false)
   const [showTools, setShowTools] = useState(false)
   
+  const [availableTools, setAvailableTools] = useState<AvailableTool[]>([])
+  const [availableSkills, setAvailableSkills] = useState<string[]>([])
+  const [selectedTools, setSelectedTools] = useState<string[]>([])
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([])
+  const [isToolsLoaded, setIsToolsLoaded] = useState(false)
+
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const scrollToBottom = () => {
@@ -41,6 +52,26 @@ function App() {
   useEffect(() => {
     scrollToBottom()
   }, [messages])
+
+  useEffect(() => {
+    const fetchToolsAndSkills = async () => {
+      try {
+        const response = await fetch('/tools-and-skills');
+        if (response.ok) {
+          const data = await response.json();
+          setAvailableTools(data.tools || []);
+          setAvailableSkills(data.skills || []);
+          setSelectedTools(data.default_tools || []);
+          setSelectedSkills(data.default_skills || []);
+          setIsToolsLoaded(true);
+        }
+      } catch (err) {
+        console.error("Failed to fetch tools", err);
+        setIsToolsLoaded(true);
+      }
+    };
+    fetchToolsAndSkills();
+  }, []);
 
   const handleClearChat = async () => {
     try {
@@ -95,6 +126,8 @@ function App() {
         body: JSON.stringify({
           session_id: sessionId,
           query: query,
+          selected_tools: selectedTools,
+          selected_skills: selectedSkills,
         }),
       })
 
@@ -293,7 +326,16 @@ function App() {
       )}
 
       {showTools && (
-        <ToolsAndSkillsModal onClose={() => setShowTools(false)} />
+        <ToolsAndSkillsModal 
+          onClose={() => setShowTools(false)} 
+          availableTools={availableTools}
+          availableSkills={availableSkills}
+          selectedTools={selectedTools}
+          selectedSkills={selectedSkills}
+          onToolsChange={setSelectedTools}
+          onSkillsChange={setSelectedSkills}
+          isLoading={!isToolsLoaded}
+        />
       )}
 
       <main className="flex-1 overflow-y-auto p-3">

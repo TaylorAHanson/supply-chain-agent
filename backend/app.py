@@ -6,14 +6,19 @@ from pydantic import BaseModel
 from databricks.sdk import WorkspaceClient
 from backend.agent.config import CATALOG_SCHEMA, MAX_ITERATIONS
 
+IS_DATABRICKS_APP = bool(os.getenv("DATABRICKS_APP_NAME"))
+
 # Set MLflow Experiment so traces are visible in the Shared folder
 experiment_name = os.getenv("MLFLOW_EXPERIMENT_NAME", "/Shared/supply_chain_agent")
+if not IS_DATABRICKS_APP:
+    # Use local profile for authentication when running locally
+    profile = os.getenv("DATABRICKS_PROFILE", "myenv")
+    mlflow.set_tracking_uri(f"databricks://{profile}")
+    
 mlflow.set_experiment(experiment_name)
 
 # Enable MLflow tracing
 mlflow.langchain.autolog()
-
-IS_DATABRICKS_APP = bool(os.getenv("DATABRICKS_APP_NAME"))
 
 # Initialize Databricks SDK for App Service Principal (Shared Auth)
 if IS_DATABRICKS_APP:
@@ -36,6 +41,8 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     session_id: str
     query: str
+    selected_tools: list = None
+    selected_skills: list = None
 
 class ChatResponse(BaseModel):
     message: str
@@ -104,7 +111,12 @@ async def chat(request: ChatRequest, req_obj: Request):
         from backend.agent.model import SupplyChainLangGraphAgent
         
         agent = SupplyChainLangGraphAgent()
-        agent.load_context(context=None, user_token=user_token)
+        agent.load_context(
+            context=None, 
+            user_token=user_token,
+            selected_tools=request.selected_tools,
+            selected_skills=request.selected_skills
+        )
         
         from mlflow.types.responses import ResponsesAgentRequest
         
@@ -180,6 +192,57 @@ async def get_tools_and_skills(req_obj: Request):
         if auth_header and auth_header.startswith("Bearer "):
             user_token = auth_header.replace("Bearer ", "")
             
+    # Optional SQLite cache for tools and skills
+    import sqlite3
+    import hashlib
+    import json
+    import time
+    
+    token_hash = hashlib.sha256(user_token.encode()).hexdigest() if user_token else "shared"
+    cache_db_path = os.path.join(os.path.dirname(__file__), 'tools_skills_cache.db')
+    
+    try:
+        conn = sqlite3.connect(cache_db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS cache (
+                token_hash TEXT PRIMARY KEY,
+                tools TEXT,
+                skills TEXT,
+                timestamp REAL
+            )
+        ''')
+        conn.commit()
+        
+        cursor.execute("SELECT tools, skills, timestamp FROM cache WHERE token_hash = ?", (token_hash,))
+        row = cursor.fetchone()
+        
+        # Cache valid for 1 hour (3600 seconds)
+        if row and (time.time() - row[2]) < 3600:
+            cached_tools = json.loads(row[0])
+            cached_skills = json.loads(row[1])
+            
+            default_tools_env = os.getenv("DEFAULT_TOOLS", "")
+            if default_tools_env.strip().lower() == "all":
+                default_tools = [t["name"] for t in cached_tools]
+            else:
+                default_tools = [t.strip() for t in default_tools_env.split(",") if t.strip()]
+                
+            default_skills_env = os.getenv("DEFAULT_SKILLS", "")
+            if default_skills_env.strip().lower() == "all":
+                default_skills = cached_skills
+            else:
+                default_skills = [s.strip() for s in default_skills_env.split(",") if s.strip()]
+                
+            return {
+                "tools": cached_tools, 
+                "skills": cached_skills,
+                "default_tools": default_tools,
+                "default_skills": default_skills
+            }
+    except Exception as e:
+        print(f"Warning: Cache error {e}")
+        
     try:
         if user_token:
             w = WorkspaceClient(
@@ -208,7 +271,9 @@ async def get_tools_and_skills(req_obj: Request):
         )
         if response_tools.status.state.value == 'SUCCEEDED' and response_tools.result.data_array:
             for row in response_tools.result.data_array:
-                tools.append(f"{row[0]}.{row[1]}.{row[2]}")
+                tool_name = f"{row[0]}.{row[1]}.{row[2]}"
+                tool_type = "Genie Space" if "genie" in row[2].lower() else "UC Function"
+                tools.append({"name": tool_name, "type": tool_type})
                 
         # Query for skills (volumes named 'skills')
         query_skills = """
@@ -233,7 +298,35 @@ async def get_tools_and_skills(req_obj: Request):
                 except Exception as e:
                     print(f"Error listing volume {volume_path}: {e}")
                     
-        return {"tools": tools, "skills": skills}
+        # Save to cache
+        try:
+            cursor.execute(
+                "INSERT OR REPLACE INTO cache (token_hash, tools, skills, timestamp) VALUES (?, ?, ?, ?)",
+                (token_hash, json.dumps(tools), json.dumps(skills), time.time())
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"Warning: Failed to save to cache {e}")
+            
+        default_tools_env = os.getenv("DEFAULT_TOOLS", "")
+        if default_tools_env.strip().lower() == "all":
+            default_tools = [t["name"] for t in tools]
+        else:
+            default_tools = [t.strip() for t in default_tools_env.split(",") if t.strip()]
+            
+        default_skills_env = os.getenv("DEFAULT_SKILLS", "")
+        if default_skills_env.strip().lower() == "all":
+            default_skills = skills
+        else:
+            default_skills = [s.strip() for s in default_skills_env.split(",") if s.strip()]
+        
+        return {
+            "tools": tools, 
+            "skills": skills,
+            "default_tools": default_tools,
+            "default_skills": default_skills
+        }
     except Exception as e:
         import traceback
         traceback.print_exc()

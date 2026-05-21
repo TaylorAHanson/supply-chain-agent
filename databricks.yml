@@ -50,6 +50,10 @@ resources:
             value: "238e4114cdfd555f"
           - name: MLFLOW_EXPERIMENT_NAME
             value: "/Shared/supply_chain_agent"
+          - name: DEFAULT_TOOLS
+            value: "all"
+          - name: DEFAULT_SKILLS
+            value: "all"
 
   jobs:
     llm_judge_evaluator:
