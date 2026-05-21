@@ -20,8 +20,10 @@ catalog_schema = os.getenv("CATALOG_SCHEMA", "taylor_hanson_build_catalog.supply
 # df = spark.table(f"{catalog_schema}.agent_payload_logs").toPandas()
 
 # For demonstration, we'll fetch recent traces using MLflow API
+experiment = mlflow.set_experiment(experiment_name)
+
 traces = mlflow.search_traces(
-    experiment_ids=[mlflow.get_experiment_by_name(experiment_name).experiment_id],
+    experiment_ids=[experiment.experiment_id],
     max_results=100
 )
 
@@ -39,34 +41,38 @@ df_eval = pd.DataFrame(eval_data)
 # COMMAND ----------
 
 # 2. Run LLM-as-a-Judge using MLflow Evaluate
-# We use a judge model configured via AI Gateway
-judge_model = "endpoints:/databricks-meta-llama-3-70b-instruct"
+if df_eval.empty:
+    print("No traces found to evaluate. Skipping evaluation.")
+else:
+    # We use a judge model configured via AI Gateway
+    judge_model = "endpoints:/databricks-meta-llama-3-70b-instruct"
 
-# Define custom metrics if needed, or use built-in
-relevance_metric = mlflow.metrics.genai.answer_relevance(model=judge_model)
-professionalism_metric = mlflow.metrics.genai.make_genai_metric(
-    name="professionalism",
-    definition="Whether the response is professional and appropriate for a business setting.",
-    grading_prompt="Score 1 if professional, 0 if not.",
-    model=judge_model,
-    parameters={"temperature": 0.0}
-)
-
-with mlflow.start_run(run_name="passive_llm_judge"):
-    results = mlflow.evaluate(
-        data=df_eval,
-        model_type="text",
-        predictions="response",
-        evaluators="default",
-        extra_metrics=[relevance_metric, professionalism_metric]
+    # Define custom metrics if needed, or use built-in
+    relevance_metric = mlflow.metrics.genai.answer_relevance(model=judge_model)
+    professionalism_metric = mlflow.metrics.genai.make_genai_metric(
+        name="professionalism",
+        definition="Whether the response is professional and appropriate for a business setting.",
+        grading_prompt="Score 1 if professional, 0 if not.",
+        model=judge_model,
+        parameters={"temperature": 0.0}
     )
+
+    with mlflow.start_run(run_name="passive_llm_judge"):
+        results = mlflow.evaluate(
+            data=df_eval,
+            model_type="text",
+            predictions="response",
+            evaluators="default",
+            extra_metrics=[relevance_metric, professionalism_metric]
+        )
 
 # COMMAND ----------
 
 # 3. Write scores back to Delta table
-eval_results_df = results.tables["eval_results_table"]
+if not df_eval.empty:
+    eval_results_df = results.tables["eval_results_table"]
 
-# spark_df = spark.createDataFrame(eval_results_df)
-# spark_df.write.mode("append").saveAsTable(f"{catalog_schema}.agent_eval_scores")
+    # spark_df = spark.createDataFrame(eval_results_df)
+    # spark_df.write.mode("append").saveAsTable(f"{catalog_schema}.agent_eval_scores")
 
-print("Successfully evaluated traces and saved scores.")
+    print("Successfully evaluated traces and saved scores.")
