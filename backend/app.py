@@ -10,7 +10,9 @@ IS_DATABRICKS_APP = bool(os.getenv("DATABRICKS_APP_NAME"))
 
 # Set MLflow Experiment so traces are visible in the Shared folder
 experiment_name = os.getenv("MLFLOW_EXPERIMENT_NAME", "/Shared/supply_chain_agent")
-if not IS_DATABRICKS_APP:
+if IS_DATABRICKS_APP:
+    mlflow.set_tracking_uri("databricks")
+else:
     # Use local profile for authentication when running locally
     profile = os.getenv("DATABRICKS_PROFILE", "myenv")
     mlflow.set_tracking_uri(f"databricks://{profile}")
