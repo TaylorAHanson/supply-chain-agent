@@ -160,10 +160,14 @@ async def chat(request: ChatRequest, req_obj: Request):
                 trace_id = "unknown"
                 try:
                     import mlflow
-                    active_trace = mlflow.get_last_active_trace()
-                    if active_trace:
-                        trace_id = active_trace.info.request_id
-                except:
+                    active_trace_id = mlflow.get_last_active_trace_id()
+                    if active_trace_id:
+                        trace_id = active_trace_id
+                        print(f"DEBUG: Trace ID extracted: {trace_id}")
+                    else:
+                        print("DEBUG: No active trace found in finally block.")
+                except Exception as e:
+                    print(f"DEBUG: Error getting trace ID: {e}")
                     pass
                 
                 session_history[request.session_id].append({"role": "assistant", "content": output_msg})

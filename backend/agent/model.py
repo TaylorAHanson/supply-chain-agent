@@ -92,8 +92,8 @@ class SupplyChainLangGraphAgent(ResponsesAgent):
         # Start a local MLflow trace explicitly if one isn't active
         local_trace = None
         try:
-            active_trace = mlflow.get_last_active_trace()
-            if not active_trace:
+            active_trace_id = mlflow.get_last_active_trace_id()
+            if not active_trace_id:
                 local_trace = mlflow.start_trace(name="agent_predict")
         except Exception:
             pass

@@ -185,24 +185,35 @@ def get_langchain_tools(w=None, selected_tools=None, user_token=None):
         if selected_tools is not None:
             func_names = [f for f in func_names if f in selected_tools]
             
+        if not func_names:
+            # No UC tools selected or discovered, don't try to initialize the toolkit to avoid warnings
+            return []
+            
         # Set the default client for Unity Catalog
         try:
             from unitycatalog.ai.core.client import set_uc_function_client
             from unitycatalog.ai.core.databricks import DatabricksFunctionClient
             
-            uc_client = DatabricksFunctionClient(client=w)
+            is_app = bool(os.environ.get("DATABRICKS_APP_NAME"))
+            if is_app:
+                uc_client = DatabricksFunctionClient(client=w)
+            else:
+                prof = os.getenv("DATABRICKS_PROFILE", "myenv")
+                uc_client = DatabricksFunctionClient(client=w, profile=prof)
+                
             set_uc_function_client(uc_client)
             
             # Use **kwargs to avoid passing unexpected kwargs if the class signature has changed
-            toolkit_kwargs = {"function_names": func_names}
+            toolkit_kwargs = {"function_names": func_names, "client": uc_client}
             
-            # Check if the client arg is accepted
-            import inspect
-            sig = inspect.signature(UCFunctionToolkit.__init__)
-            if "client" in sig.parameters:
-                toolkit_kwargs["client"] = uc_client
-                
-            toolkit = UCFunctionToolkit(**toolkit_kwargs)
+            try:
+                toolkit = UCFunctionToolkit(**toolkit_kwargs)
+            except Exception as inner_e:
+                if "unexpected keyword argument 'client'" in str(inner_e) or "Extra inputs are not permitted" in str(inner_e):
+                    # Try without client if it's not supported by this version
+                    toolkit = UCFunctionToolkit(function_names=func_names)
+                else:
+                    raise inner_e
         except ImportError:
             # unitycatalog-ai <= 0.3.x compatibility
             try:
@@ -210,7 +221,15 @@ def get_langchain_tools(w=None, selected_tools=None, user_token=None):
                 set_uc_function_client(w)
                 toolkit = UCFunctionToolkit(function_names=func_names)
             except ImportError:
-                toolkit = UCFunctionToolkit(function_names=func_names)
+                # If set_uc_function_client is not available, some older versions
+                # allow WorkspaceClient to be passed as workspace_client
+                try:
+                    toolkit = UCFunctionToolkit(function_names=func_names, workspace_client=w)
+                except Exception:
+                    try:
+                        toolkit = UCFunctionToolkit(function_names=func_names, client=w)
+                    except Exception:
+                        toolkit = UCFunctionToolkit(function_names=func_names)
             
         langchain_tools.extend(toolkit.tools)
     except Exception as e:
