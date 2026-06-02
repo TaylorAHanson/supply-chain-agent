@@ -69,6 +69,12 @@ else:
 if not df_eval.empty:
     eval_results_df = results.tables["eval_results_table"]
 
+    # Convert complex object columns (like dicts/lists in inputs/outputs) to strings
+    # to avoid PySpark Arrow conversion errors for object types
+    for col in eval_results_df.columns:
+        if eval_results_df[col].dtype == 'object':
+            eval_results_df[col] = eval_results_df[col].astype(str)
+
     spark_df = spark.createDataFrame(eval_results_df)
     spark_df.write.mode("append").saveAsTable(f"{catalog_schema}.agent_eval_scores")
 

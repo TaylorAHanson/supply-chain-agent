@@ -75,14 +75,56 @@ def discover_tools():
             
     return schemas, execution_routing
 
+# Local Python tools that are NOT registered as Unity Catalog functions and therefore must
+# always be bound directly. The system prompt instructs the model to use these by name, so if
+# they aren't bound the model "fabricates" the calls as text instead of actually running them.
+_CORE_LOCAL_TOOLS = ["query_lakehouse", "read_skill"]
+
+
+def _load_local_mcp_tools(only=None, selected_tools=None):
+    """Wrap local Python tools in backend/tools/mcp/ as LangChain tools.
+
+    ``only`` restricts to a specific set of module names; ``selected_tools`` (if provided)
+    further filters by the user's tool selection.
+    """
+    from langchain_core.tools import tool
+    import pkgutil
+    import importlib
+    import inspect as _inspect
+    import backend.tools.mcp
+
+    loaded = []
+    for _, module_name, _ in pkgutil.iter_modules(backend.tools.mcp.__path__):
+        if module_name.startswith("_"):
+            continue
+        if only is not None and module_name not in only:
+            continue
+        if selected_tools is not None and module_name not in selected_tools:
+            continue
+        try:
+            mod = importlib.import_module(f"backend.tools.mcp.{module_name}")
+            func = getattr(mod, module_name, None)
+            if _inspect.isfunction(func):
+                loaded.append(tool(func))
+        except Exception as e:
+            print(f"Warning: Failed to load tool {module_name}: {e}")
+    return loaded
+
+
 def get_langchain_tools(w=None, selected_tools=None, user_token=None):
     """
     Discovers all tools dynamically and wraps them as LangChain tools.
     """
-    from langchain_core.tools import tool
     import os
     
     langchain_tools = []
+
+    # Always bind the core local tools (query_lakehouse, read_skill). These are not UC
+    # functions, so the UC path below never loads them — yet the prompt depends on them.
+    langchain_tools.extend(
+        _load_local_mcp_tools(only=_CORE_LOCAL_TOOLS, selected_tools=selected_tools)
+    )
+    _bound_names = {t.name for t in langchain_tools}
     
     # Use Databricks Langchain UCFunctionToolkit to load tools
     try:
@@ -231,25 +273,20 @@ def get_langchain_tools(w=None, selected_tools=None, user_token=None):
                     except Exception:
                         toolkit = UCFunctionToolkit(function_names=func_names)
             
-        langchain_tools.extend(toolkit.tools)
+        # Avoid binding two tools with the same name (e.g. a UC function that shares a name
+        # with a core local tool already bound above).
+        for t in toolkit.tools:
+            if t.name not in _bound_names:
+                langchain_tools.append(t)
+                _bound_names.add(t.name)
     except Exception as e:
         print(f"Warning: Failed to load UC tools: {e}")
-        print("Falling back to local Python tools...")
-        import pkgutil
-        import importlib
-        import inspect
-        import backend.tools.mcp
-        
-        for _, module_name, _ in pkgutil.iter_modules(backend.tools.mcp.__path__):
-            if module_name.startswith("_"): continue
-            try:
-                mod = importlib.import_module(f"backend.tools.mcp.{module_name}")
-                if hasattr(mod, module_name):
-                    func = getattr(mod, module_name)
-                    if inspect.isfunction(func):
-                        langchain_tools.append(tool(func))
-            except Exception as e:
-                print(f"Warning: Failed to load tool {module_name}: {e}")
+        print("Falling back to all local Python tools...")
+        # UC functions are unavailable — bind every local tool (minus what's already bound).
+        for t in _load_local_mcp_tools(selected_tools=selected_tools):
+            if t.name not in _bound_names:
+                langchain_tools.append(t)
+                _bound_names.add(t.name)
                 
     return langchain_tools
 

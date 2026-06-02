@@ -17,12 +17,20 @@ resources:
   apps:
     supply_chain_agent:
       name: supply-chain-agent-v3
+      permissions:
+        - level: CAN_MANAGE
+          group_name: edh_dbx_supplychain_owner
       source_code_path: .
       user_api_scopes:
         - "model-serving"
         - "sql"
         - "files"
         - "ai-gateway"
+      resources:
+        - name: "serving-endpoint"
+          serving_endpoint:
+            name: "supply_chain_agent_endpoint"
+            permission: "CAN_QUERY"
       config:
         command:
           - "python"
@@ -58,6 +66,9 @@ resources:
   jobs:
     llm_judge_evaluator:
       name: "Supply Chain Agent - LLM Judge Evaluator"
+      # permissions:
+      #   - level: CAN_MANAGE
+      #     group_name: edh_dbx_supplychain_owner
       environments:
         - environment_key: default
           spec:

@@ -17,6 +17,7 @@ interface ToolCall {
 interface Message {
   role: 'user' | 'assistant';
   content: string;
+  reasoning?: string;
   tool_calls?: ToolCall[];
   trace_id?: string;
   feedback?: 'up' | 'down';
@@ -25,6 +26,39 @@ interface Message {
 interface AvailableTool {
   name: string;
   type: string;
+}
+
+function ThinkingDisclosure({ text, label, defaultOpen }: { text: string; label: string; defaultOpen: boolean }) {
+  // null = follow the auto/default behavior (open while thinking, collapse once the
+  // answer arrives); once the user clicks, their choice sticks.
+  const [openOverride, setOpenOverride] = useState<boolean | null>(null);
+  const open = openOverride === null ? defaultOpen : openOverride;
+  const trimmed = text.replace(/\n{3,}/g, '\n\n').trim();
+
+  return (
+    <div className="mb-2">
+      <button
+        type="button"
+        onClick={() => setOpenOverride(!open)}
+        className="flex items-center gap-1.5 text-[11px] font-medium text-gray-400 hover:text-gray-600 transition-colors"
+      >
+        <svg
+          className={`w-3 h-3 transition-transform duration-150 ${open ? 'rotate-90' : ''}`}
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
+        </svg>
+        <span>{label}</span>
+      </button>
+      {open && (
+        <div className="mt-1.5 rounded-md bg-gray-50 border border-gray-100 px-3 py-2 text-[12px] text-gray-500 whitespace-pre-wrap leading-relaxed">
+          {trimmed}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function App() {
@@ -163,6 +197,47 @@ function App() {
                       const lastMessage = { ...newMessages[lastMessageIndex] };
                       if (lastMessage.role === 'assistant') {
                         lastMessage.content += data.content;
+                      }
+                      newMessages[lastMessageIndex] = lastMessage;
+                      return newMessages;
+                    });
+                  } else if (data.type === 'reasoning') {
+                    setMessages(prev => {
+                      const newMessages = [...prev];
+                      const lastMessageIndex = newMessages.length - 1;
+                      const lastMessage = { ...newMessages[lastMessageIndex] };
+                      if (lastMessage.role === 'assistant') {
+                        lastMessage.reasoning = (lastMessage.reasoning || '') + data.content;
+                      }
+                      newMessages[lastMessageIndex] = lastMessage;
+                      return newMessages;
+                    });
+                  } else if (data.type === 'reclassify') {
+                    // A streamed snippet was actually reasoning, not the answer: move it
+                    // from the visible message content into the thinking panel.
+                    setMessages(prev => {
+                      const newMessages = [...prev];
+                      const lastMessageIndex = newMessages.length - 1;
+                      const lastMessage = { ...newMessages[lastMessageIndex] };
+                      if (lastMessage.role === 'assistant') {
+                        const moved: string = data.content;
+                        if (lastMessage.content.endsWith(moved)) {
+                          lastMessage.content = lastMessage.content.slice(0, -moved.length);
+                        }
+                        lastMessage.reasoning = (lastMessage.reasoning || '') + moved;
+                      }
+                      newMessages[lastMessageIndex] = lastMessage;
+                      return newMessages;
+                    });
+                  } else if (data.type === 'final') {
+                    // Authoritative cleaned answer from the backend — replace the streamed
+                    // content so no raw tool scaffolding can remain visible.
+                    setMessages(prev => {
+                      const newMessages = [...prev];
+                      const lastMessageIndex = newMessages.length - 1;
+                      const lastMessage = { ...newMessages[lastMessageIndex] };
+                      if (lastMessage.role === 'assistant') {
+                        lastMessage.content = data.content;
                       }
                       newMessages[lastMessageIndex] = lastMessage;
                       return newMessages;
@@ -350,6 +425,14 @@ function App() {
                 {msg.role === 'user' ? (
                   <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
                 ) : (
+                  <>
+                  {msg.reasoning && (
+                    <ThinkingDisclosure
+                      text={msg.reasoning}
+                      label={isLoading && idx === messages.length - 1 && !msg.content ? 'Thinking…' : 'Thoughts'}
+                      defaultOpen={isLoading && idx === messages.length - 1 && !msg.content}
+                    />
+                  )}
                   <div className="agent-message-content leading-relaxed prose prose-sm max-w-none">
                     {msg.content ? (
                       <>
@@ -372,6 +455,7 @@ function App() {
                       </div>
                     )}
                   </div>
+                  </>
                 )}
                 
                 {msg.tool_calls && msg.tool_calls.length > 0 && (

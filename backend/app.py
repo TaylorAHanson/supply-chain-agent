@@ -62,6 +62,22 @@ class FeedbackRequest(BaseModel):
 # In-memory store for conversational history
 session_history = {}
 
+
+def _extract_item_text(item):
+    """Pull the plain text out of a ResponsesAgent output item (object or dict)."""
+    if item is None:
+        return None
+    content = getattr(item, "content", None) if not isinstance(item, dict) else item.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") in ("output_text", "text"):
+                parts.append(block.get("text", ""))
+        return "".join(parts)
+    return None
+
 @app.post("/clear_chat")
 async def clear_chat(request: ClearChatRequest):
     if request.session_id in session_history:
@@ -145,7 +161,25 @@ async def chat(request: ChatRequest, req_obj: Request):
                         if chunk:
                             output_msg += chunk
                             yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
+                    elif event_type in ["response.reasoning_text.delta", "reasoning_text.delta"]:
+                        reasoning_chunk = getattr(stream_event, "delta", "") if not isinstance(stream_event, dict) else stream_event.get("delta", "")
+                        if reasoning_chunk:
+                            yield f"data: {json.dumps({'type': 'reasoning', 'content': reasoning_chunk})}\n\n"
+                    elif event_type in ["response.reasoning_reclassify", "reasoning_reclassify"]:
+                        moved = getattr(stream_event, "delta", "") if not isinstance(stream_event, dict) else stream_event.get("delta", "")
+                        if moved:
+                            # Pull the leaked preamble back out of the running answer text.
+                            if output_msg.endswith(moved):
+                                output_msg = output_msg[: -len(moved)]
+                            yield f"data: {json.dumps({'type': 'reclassify', 'content': moved})}\n\n"
                     elif event_type in ["response.output_item.done", "output_item.done"]:
+                        # Authoritative final answer (scaffolding already stripped) — replace
+                        # whatever was streamed so no raw tool markup can remain visible.
+                        item = getattr(stream_event, "item", None) if not isinstance(stream_event, dict) else stream_event.get("item")
+                        final_text = _extract_item_text(item)
+                        if final_text is not None:
+                            output_msg = final_text
+                            yield f"data: {json.dumps({'type': 'final', 'content': final_text})}\n\n"
                         if hasattr(stream_event, "custom_outputs"):
                             tool_calls_executed = stream_event.custom_outputs.get("tool_calls", [])
                             yield f"data: {json.dumps({'type': 'tool_calls', 'content': tool_calls_executed})}\n\n"
