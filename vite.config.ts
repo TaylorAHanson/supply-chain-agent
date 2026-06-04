@@ -9,12 +9,14 @@ export default defineConfig({
     tailwindcss(),
   ],
   server: {
+    port: 5174,
+    strictPort: true,
     proxy: {
-      '/chat': 'http://127.0.0.1:8000',
-      '/upload': 'http://127.0.0.1:8000',
-      '/clear_chat': 'http://127.0.0.1:8000',
-      '/feedback': 'http://127.0.0.1:8000',
-      '/tools-and-skills': 'http://127.0.0.1:8000'
+      '/chat': 'http://127.0.0.1:8001',
+      '/upload': 'http://127.0.0.1:8001',
+      '/clear_chat': 'http://127.0.0.1:8001',
+      '/feedback': 'http://127.0.0.1:8001',
+      '/tools-and-skills': 'http://127.0.0.1:8001'
     }
   }
 })

@@ -26,6 +26,7 @@ interface Message {
 interface AvailableTool {
   name: string;
   type: string;
+  always_on?: boolean;
 }
 
 function ThinkingDisclosure({ text, label, defaultOpen }: { text: string; label: string; defaultOpen: boolean }) {
@@ -63,7 +64,7 @@ function ThinkingDisclosure({ text, label, defaultOpen }: { text: string; label:
 
 function App() {
   const [messages, setMessages] = useState<Message[]>([
-    { role: 'assistant', content: 'Hello! I am your Supply Chain AI Agent. How can I help you today?' }
+    { role: 'assistant', content: 'Hello! I am the EDH Agent. How can I help you today?' }
   ])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -75,7 +76,14 @@ function App() {
   const [availableSkills, setAvailableSkills] = useState<string[]>([])
   const [selectedTools, setSelectedTools] = useState<string[]>([])
   const [selectedSkills, setSelectedSkills] = useState<string[]>([])
+  const [userPrompt, setUserPrompt] = useState<string>(() => {
+    try { return localStorage.getItem('edh_user_prompt') || '' } catch { return '' }
+  })
   const [isToolsLoaded, setIsToolsLoaded] = useState(false)
+
+  useEffect(() => {
+    try { localStorage.setItem('edh_user_prompt', userPrompt) } catch { /* ignore */ }
+  }, [userPrompt])
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -162,6 +170,7 @@ function App() {
           query: query,
           selected_tools: selectedTools,
           selected_skills: selectedSkills,
+          user_prompt: userPrompt,
         }),
       })
 
@@ -366,7 +375,7 @@ function App() {
     <div className="flex flex-col h-screen bg-gray-50 text-sm">
       <header className="bg-white shadow-sm px-4 py-2 flex justify-between items-center">
         <div>
-          <h1 className="text-base font-semibold text-gray-800">Supply Chain Agent</h1>
+          <h1 className="text-base font-semibold text-gray-800">EDH Agent</h1>
           <p className="text-[10px] text-gray-500">Databricks Agent Framework + FastMCP</p>
         </div>
         <div className="flex items-center space-x-2">
@@ -409,6 +418,8 @@ function App() {
           selectedSkills={selectedSkills}
           onToolsChange={setSelectedTools}
           onSkillsChange={setSelectedSkills}
+          userPrompt={userPrompt}
+          onUserPromptChange={setUserPrompt}
           isLoading={!isToolsLoaded}
         />
       )}

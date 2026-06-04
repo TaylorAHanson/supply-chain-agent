@@ -4,7 +4,7 @@ set -e
 # Prevent MSYS (Git Bash on Windows) from converting Databricks workspace paths to local Windows paths
 export MSYS_NO_PATHCONV=1
 
-# Supply Chain Agent - Databricks Apps Deployment Script
+# EDH Agent - Databricks Apps Deployment Script
 # 
 # Usage:
 #   ./deploy_app.sh

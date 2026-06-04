@@ -1,7 +1,7 @@
 [project]
-name = "supply-chain-agent"
+name = "edh-agent"
 version = "0.1.0"
-description = "Supply Chain AI Agent with Databricks Agent Framework"
+description = "EDH Agent (Qualcomm) on Databricks with the Databricks Agent Framework"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

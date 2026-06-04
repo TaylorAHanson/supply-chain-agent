@@ -1,32 +1,32 @@
 import os
 import pandas as pd
 import mlflow
-from backend.agent.model import SupplyChainLangGraphAgent
+from backend.agent.model import EDHAgent
 
 def test_agent_evaluation():
     """
-    Run an evaluation suite against the SupplyChainLangGraphAgent using MLflow Evaluate.
+    Run an evaluation suite against the EDHAgent using MLflow Evaluate.
     This simulates a CI/CD check for the agent's performance.
     """
     
-    # 1. Define evaluation dataset
+    # 1. Define evaluation dataset (generic data-assistant questions; customize per workspace)
     eval_data = pd.DataFrame(
         {
             "request": [
-                "What is the current inventory for SKU-123?",
-                "Can you draft a purchase order for 50 units of SKU-456?",
-                "Who is the supplier for SKU-789?"
+                "Which Unity Catalog catalogs can I access?",
+                "How many rows are in the largest table you can see? Use SQL.",
+                "List the Genie spaces available to me."
             ],
             "expected_response": [
-                "The current inventory for SKU-123 is",
-                "I have drafted a purchase order",
-                "The supplier for SKU-789 is"
+                "A list of accessible catalogs",
+                "A row count for the largest accessible table",
+                "A list of available Genie spaces with their space ids"
             ],
         }
     )
 
     # 2. Initialize the agent
-    agent = SupplyChainLangGraphAgent()
+    agent = EDHAgent()
     agent.load_context(None)
     
     # 3. Define a wrapper function for MLflow evaluate
@@ -57,7 +57,7 @@ def test_agent_evaluation():
         return responses
 
     # 4. Run evaluation
-    with mlflow.start_run(run_name="supply_chain_agent_eval"):
+    with mlflow.start_run(run_name="edh_agent_eval"):
         results = mlflow.evaluate(
             model=model_wrapper,
             data=eval_data,

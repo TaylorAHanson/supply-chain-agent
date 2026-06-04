@@ -29,7 +29,7 @@ if IS_DATABRICKS_APP:
 else:
     shared_w = WorkspaceClient(profile=os.getenv("DATABRICKS_PROFILE"))
 
-app = FastAPI(title="Supply Chain Agent API")
+app = FastAPI(title="EDH Agent API")
 
 # Add CORS middleware for frontend
 app.add_middleware(
@@ -45,6 +45,7 @@ class ChatRequest(BaseModel):
     query: str
     selected_tools: list = None
     selected_skills: list = None
+    user_prompt: str = None
 
 class ChatResponse(BaseModel):
     message: str
@@ -126,14 +127,15 @@ async def chat(request: ChatRequest, req_obj: Request):
         
         tool_calls_executed = []
         
-        from backend.agent.model import SupplyChainLangGraphAgent
+        from backend.agent.model import EDHAgent
         
-        agent = SupplyChainLangGraphAgent()
+        agent = EDHAgent()
         agent.load_context(
             context=None, 
             user_token=user_token,
             selected_tools=request.selected_tools,
-            selected_skills=request.selected_skills
+            selected_skills=request.selected_skills,
+            user_prompt=request.user_prompt
         )
         
         from mlflow.types.responses import ResponsesAgentRequest
@@ -146,13 +148,38 @@ async def chat(request: ChatRequest, req_obj: Request):
         
         # Use Server-Sent Events to stream the response
         from fastapi.responses import StreamingResponse
+        import asyncio
         import json
         
         async def event_generator():
             nonlocal tool_calls_executed
             output_msg = ""
+            # The agent's predict_stream is a *blocking* generator (tools like ask_genie can
+            # poll Genie for minutes). Run it on a worker thread and hand events back to the
+            # event loop through a queue, so other requests aren't stalled. Keeping the whole
+            # generator on one executor thread also keeps MLflow's trace context consistent.
+            loop = asyncio.get_running_loop()
+            event_queue: asyncio.Queue = asyncio.Queue()  # unbounded: put_nowait never raises
+            _PRODUCER_DONE = object()
+
+            def _produce_events():
+                try:
+                    for ev in agent.predict_stream(req):
+                        loop.call_soon_threadsafe(event_queue.put_nowait, ("event", ev))
+                except Exception as exc:
+                    loop.call_soon_threadsafe(event_queue.put_nowait, ("error", exc))
+                finally:
+                    loop.call_soon_threadsafe(event_queue.put_nowait, ("done", _PRODUCER_DONE))
+
+            producer_future = loop.run_in_executor(None, _produce_events)
             try:
-                for stream_event in agent.predict_stream(req):
+                while True:
+                    _kind, _payload = await event_queue.get()
+                    if _kind == "done":
+                        break
+                    if _kind == "error":
+                        raise _payload
+                    stream_event = _payload
                     # The type could be accessible via attribute or dict key depending on MLflow version
                     event_type = getattr(stream_event, "type", None) if not isinstance(stream_event, dict) else stream_event.get("type")
                     
@@ -192,6 +219,11 @@ async def chat(request: ChatRequest, req_obj: Request):
                 traceback.print_exc()
                 yield f"data: {json.dumps({'type': 'error', 'content': str(stream_err)})}\n\n"
             finally:
+                # Ensure the worker thread has fully finished before we close the stream.
+                try:
+                    await producer_future
+                except Exception:
+                    pass
                 # Normal response received, break loop
                 trace_id = "unknown"
                 try:
@@ -219,6 +251,23 @@ async def chat(request: ChatRequest, req_obj: Request):
         if "not ready" in error_msg.lower() or "not_ready" in error_msg.lower() or "503" in error_msg:
             return ChatResponse(message="⏳ The Databricks Agent endpoint is still provisioning. This usually takes 5-10 minutes. Please try again shortly!")
         raise HTTPException(status_code=500, detail=f"Error querying agent endpoint: {error_msg}")
+
+# Tools that the agent always binds regardless of UC discovery or user selection. These don't
+# come from system.information_schema, so we inject them into the discovery response so the UI
+# can show them. They are governed at call time by the user's OBO identity.
+ALWAYS_ON_TOOLS = [
+    {"name": "query_lakehouse", "type": "Managed MCP · SQL", "always_on": True},
+    {"name": "ask_genie", "type": "Managed MCP · Genie", "always_on": True},
+    {"name": "list_genies", "type": "Managed MCP · Genie", "always_on": True},
+    {"name": "read_skill", "type": "Local", "always_on": True},
+]
+
+
+def _with_always_on_tools(tools):
+    """Prepend the always-on tools to a discovered tool list (de-duplicated by name)."""
+    existing = {t.get("name") for t in tools}
+    return [t for t in ALWAYS_ON_TOOLS if t["name"] not in existing] + list(tools)
+
 
 @app.get("/tools-and-skills")
 async def get_tools_and_skills(req_obj: Request):
@@ -259,7 +308,7 @@ async def get_tools_and_skills(req_obj: Request):
         
         # Cache valid for 1 hour (3600 seconds)
         if row and (time.time() - row[2]) < 3600:
-            cached_tools = json.loads(row[0])
+            cached_tools = _with_always_on_tools(json.loads(row[0]))
             cached_skills = json.loads(row[1])
             
             default_tools_env = os.getenv("DEFAULT_TOOLS", "")
@@ -349,6 +398,8 @@ async def get_tools_and_skills(req_obj: Request):
         except Exception as e:
             print(f"Warning: Failed to save to cache {e}")
             
+        tools = _with_always_on_tools(tools)
+
         default_tools_env = os.getenv("DEFAULT_TOOLS", "")
         if default_tools_env.strip().lower() == "all":
             default_tools = [t["name"] for t in tools]
@@ -376,7 +427,9 @@ async def get_tools_and_skills(req_obj: Request):
 async def upload_file(file: UploadFile = File(...)):
     try:
         import io
-        catalog, schema = CATALOG_SCHEMA.split(".")
+        if not CATALOG_SCHEMA or "." not in CATALOG_SCHEMA:
+            raise HTTPException(status_code=400, detail="CATALOG_SCHEMA is not configured; cannot resolve an upload volume.")
+        catalog, schema = CATALOG_SCHEMA.split(".", 1)
         volume_path = f"/Volumes/{catalog}/{schema}/uploads/{file.filename}"
         
         contents = await file.read()
@@ -402,4 +455,4 @@ if os.path.exists(frontend_dir):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("backend.app:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("backend.app:app", host="0.0.0.0", port=8001, reload=True)

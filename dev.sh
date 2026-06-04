@@ -1,6 +1,13 @@
 #!/bin/bash
 
-echo "🚀 Starting Supply Chain Agent local development environment..."
+echo "🚀 Starting EDH Agent local development environment..."
+
+# Local-dev config defaults (overridable). Production injects these via databricks.yml.
+# Point these at your own catalog/schema/warehouse; they're kept out of backend/agent/config.py
+# so the shipped code stays generic.
+export CATALOG_SCHEMA="${CATALOG_SCHEMA:-taylor_hanson_build_catalog.supply_chain_schema}"
+export SKILLS_VOLUME_PATH="${SKILLS_VOLUME_PATH:-/Volumes/taylor_hanson_build_catalog/supply_chain_schema/skills}"
+export DATABRICKS_WAREHOUSE_ID="${DATABRICKS_WAREHOUSE_ID:-238e4114cdfd555f}"
 
 # Prompt for profile if not set in environment
 if [[ -z "${DATABRICKS_PROFILE}" ]]; then
@@ -44,9 +51,9 @@ if [[ ! -d "node_modules" ]]; then
     npm install
 fi
 
-echo "🐍 Starting FastAPI backend on port 8000..."
+echo "🐍 Starting FastAPI backend on port 8001..."
 # We use Python module execution to ensure the path is right
-python -m uvicorn backend.app:app --reload --port 8000 &
+python -m uvicorn backend.app:app --reload --port 8001 &
 BACKEND_PID=$!
 
 echo "⚛️  Starting React frontend..."
@@ -55,8 +62,8 @@ FRONTEND_PID=$!
 
 echo ""
 echo "✅ Local development environment is running!"
-echo "   Frontend: http://localhost:5173"
-echo "   Backend:  http://localhost:8000"
+echo "   Frontend: http://localhost:5174"
+echo "   Backend:  http://localhost:8001"
 echo ""
 echo "Press Ctrl+C to stop both services."
 

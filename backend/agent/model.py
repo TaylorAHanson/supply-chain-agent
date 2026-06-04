@@ -10,7 +10,7 @@ from mlflow.types.responses import (
     output_to_responses_items_stream,
     to_chat_completions_input,
 )
-from backend.agent.config import CATALOG_SCHEMA, MAX_TOKENS, LLM_MODEL_NAME
+from backend.agent.config import CATALOG_SCHEMA, MAX_TOKENS, MAX_ITERATIONS, LLM_MODEL_NAME
 
 
 # Process-wide cache of guardrail detection, keyed by endpoint name. An endpoint's
@@ -235,12 +235,12 @@ def _build_tool_error_middleware():
         return []
 
 
-class SupplyChainLangGraphAgent(ResponsesAgent):
+class EDHAgent(ResponsesAgent):
     def __init__(self):
         self.agent = None
         self.streaming_enabled = True
 
-    def load_context(self, context=None, user_token=None, selected_tools=None, selected_skills=None):
+    def load_context(self, context=None, user_token=None, selected_tools=None, selected_skills=None, user_prompt=None):
         import os
         from databricks.sdk import WorkspaceClient
         from langchain_openai import ChatOpenAI
@@ -278,10 +278,11 @@ class SupplyChainLangGraphAgent(ResponsesAgent):
         # Any AI Gateway guardrails configured on the endpoint are applied transparently here.
         base_url = f"{host}/serving-endpoints"
         llm = ChatOpenAI(
-            model=LLM_MODEL_NAME, # The serving endpoint name (e.g. supply_chain_agent_endpoint)
+            model=LLM_MODEL_NAME, # The serving endpoint name (e.g. the EDH agent serving endpoint)
             api_key=token,
             base_url=base_url,
-            streaming=self.streaming_enabled
+            streaming=self.streaming_enabled,
+            max_tokens=MAX_TOKENS,
         )
         
         # Build System Prompt
@@ -296,11 +297,21 @@ class SupplyChainLangGraphAgent(ResponsesAgent):
                 system_prompt = f.read()
         except FileNotFoundError:
             # Fallback if file isn't bundled correctly
-            system_prompt = "You are a helpful supply chain AI agent."
+            system_prompt = "You are the EDH Agent, an enterprise data assistant for Qualcomm running in Databricks."
         
         # Get Skills
         system_prompt += discover_skills(w=self.w, selected_skills=selected_skills, user_token=user_token)
-        
+
+        # Append the user-supplied main prompt last so it takes precedence over the
+        # baked-in instructions (without letting it silently discard tool/skill guidance).
+        if user_prompt and str(user_prompt).strip():
+            system_prompt += (
+                "\n\n## Additional user instructions\n"
+                "The current user has provided the following instructions. Follow them, "
+                "unless they conflict with the safety and tool-usage rules above.\n\n"
+                f"{str(user_prompt).strip()}\n"
+            )
+
         # Get Tools
         tools = get_langchain_tools(w=self.w, selected_tools=selected_tools, user_token=user_token)
         
@@ -339,7 +350,12 @@ class SupplyChainLangGraphAgent(ResponsesAgent):
             if request.custom_inputs and "session_id" in request.custom_inputs:
                 session_id = request.custom_inputs["session_id"]
                 
-            config = {"configurable": {"thread_id": session_id}}
+            # recursion_limit caps LangGraph super-steps (~2 per agent turn: model call + tool
+            # execution), so map the configured MAX_ITERATIONS (agent loops) to 2*N+1 nodes.
+            config = {
+                "configurable": {"thread_id": session_id},
+                "recursion_limit": 2 * MAX_ITERATIONS + 1,
+            }
             
             if self.streaming_enabled:
                 yield from self._predict_streaming(cc_msgs, config)
@@ -551,7 +567,7 @@ def log_agent_model():
     with mlflow.start_run():
         logged_agent_info = mlflow.pyfunc.log_model(
             python_model="backend/agent/model.py",
-            name="supply-chain-agent",
+            name="edh-agent",
             artifacts={"prompt": "backend/agent/prompt.md"}
         )
         return logged_agent_info

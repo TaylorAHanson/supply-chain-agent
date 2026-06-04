@@ -78,7 +78,63 @@ def discover_tools():
 # Local Python tools that are NOT registered as Unity Catalog functions and therefore must
 # always be bound directly. The system prompt instructs the model to use these by name, so if
 # they aren't bound the model "fabricates" the calls as text instead of actually running them.
-_CORE_LOCAL_TOOLS = ["query_lakehouse", "read_skill"]
+# (SQL + Genie are now served by the Databricks managed MCP servers — see _load_managed_mcp_tools.)
+_CORE_LOCAL_TOOLS = ["read_skill"]
+
+# Managed-MCP-backed tools always bound first so they win name de-dup over any UC/local twins.
+_MANAGED_MCP_TOOL_NAMES = ["query_lakehouse", "ask_genie", "list_genies"]
+
+
+def _mcp_host_and_token(w, user_token):
+    """Resolve the workspace host + bearer token to call managed MCP servers.
+
+    Prefers the user's OBO token (governance parity); otherwise falls back to the token the
+    WorkspaceClient is configured with (e.g. the Databricks App service principal).
+    """
+    import os
+
+    host = (w.config.host or "").rstrip("/")
+    if host and not host.startswith("http"):
+        host = f"https://{host}"
+
+    token = user_token
+    if not token:
+        try:
+            headers = w.config.authenticate()
+            if isinstance(headers, dict) and "Authorization" in headers:
+                token = headers["Authorization"].replace("Bearer ", "")
+        except Exception:
+            token = None
+    if not token:
+        token = os.environ.get("DATABRICKS_TOKEN") or getattr(w.config, "token", None)
+    return host, token
+
+
+def _load_managed_mcp_tools(w, user_token):
+    """Build the SQL + Genie tools backed by Databricks managed MCP servers.
+
+    Returns an empty list (and logs) on any failure so the agent still comes up with its
+    remaining tools rather than crashing.
+    """
+    try:
+        from backend.tools.managed_mcp import (
+            ManagedMCPClient,
+            build_sql_tool,
+            build_genie_tools,
+        )
+
+        host, token = _mcp_host_and_token(w, user_token)
+        if not host or not token:
+            print("Warning: could not resolve host/token for managed MCP tools; skipping.")
+            return []
+
+        client = ManagedMCPClient(host=host, token=token)
+        tools = [build_sql_tool(client)]
+        tools.extend(build_genie_tools(client, w=w))
+        return tools
+    except Exception as e:
+        print(f"Warning: Failed to load managed MCP tools: {e}")
+        return []
 
 
 def _load_local_mcp_tools(only=None, selected_tools=None):
@@ -119,8 +175,21 @@ def get_langchain_tools(w=None, selected_tools=None, user_token=None):
     
     langchain_tools = []
 
-    # Always bind the core local tools (query_lakehouse, read_skill). These are not UC
-    # functions, so the UC path below never loads them — yet the prompt depends on them.
+    # Ensure we have a WorkspaceClient (the managed-MCP tools need its host + token).
+    if w is None:
+        from databricks.sdk import WorkspaceClient
+        if bool(os.environ.get("DATABRICKS_APP_NAME")):
+            w = WorkspaceClient()
+        else:
+            w = WorkspaceClient(profile=os.getenv("DATABRICKS_PROFILE", "myenv"))
+
+    # Bind the Databricks managed-MCP tools first (SQL + Genie). These replace the old
+    # hand-rolled query_lakehouse/ask_genie and run under the user's OBO token. Binding them
+    # first means name de-dup below skips any UC/local functions that share these names.
+    langchain_tools.extend(_load_managed_mcp_tools(w, user_token))
+
+    # Always bind the remaining core local tools (read_skill). These are not UC functions, so
+    # the UC path below never loads them — yet the prompt depends on them.
     langchain_tools.extend(
         _load_local_mcp_tools(only=_CORE_LOCAL_TOOLS, selected_tools=selected_tools)
     )
@@ -197,18 +266,10 @@ def get_langchain_tools(w=None, selected_tools=None, user_token=None):
                             func_names.append(f"{row[0]}.{row[1]}.{row[2]}")
             except Exception as e:
                 print(f"Warning: Failed to dynamically discover tools: {e}")
-                # Fallback to config schema if dynamic discovery fails
-                default_catalog = CATALOG_SCHEMA if CATALOG_SCHEMA else "default.default"
-                func_names = [
-                    f"{default_catalog}.get_inventory",
-                    f"{default_catalog}.get_supplier_lead_times",
-                    f"{default_catalog}.draft_purchase_order",
-                    f"{default_catalog}.manage_safety_stock",
-                    f"{default_catalog}.list_genies",
-                    f"{default_catalog}.ask_genie",
-                    f"{default_catalog}.notify_slack_channel",
-                    f"{default_catalog}.get_erp_supplier_status"
-                ]
+                # No hard-coded fallback: leave func_names empty. The managed-MCP tools
+                # (query_lakehouse, ask_genie, list_genies) and read_skill are already bound
+                # above, so the agent still functions even when UC discovery fails.
+                func_names = []
             
         # Save to cache if not already populated by the endpoint
         if not cache_hit:
@@ -231,47 +292,30 @@ def get_langchain_tools(w=None, selected_tools=None, user_token=None):
             # No UC tools selected or discovered, don't try to initialize the toolkit to avoid warnings
             return []
             
-        # Set the default client for Unity Catalog
-        try:
-            from unitycatalog.ai.core.client import set_uc_function_client
-            from unitycatalog.ai.core.databricks import DatabricksFunctionClient
-            
-            is_app = bool(os.environ.get("DATABRICKS_APP_NAME"))
-            if is_app:
-                uc_client = DatabricksFunctionClient(client=w)
-            else:
-                prof = os.getenv("DATABRICKS_PROFILE", "myenv")
-                uc_client = DatabricksFunctionClient(client=w, profile=prof)
-                
-            set_uc_function_client(uc_client)
-            
-            # Use **kwargs to avoid passing unexpected kwargs if the class signature has changed
-            toolkit_kwargs = {"function_names": func_names, "client": uc_client}
-            
+        # Build a UC function client bound to OUR WorkspaceClient (OBO user token, or the app
+        # service principal). Passing client=w is critical: without it the toolkit falls back to
+        # ambient databricks-cli auth (e.g. a stale default profile) and fails with
+        # "No client provided". The toolkit accepts the client directly, so we don't depend on
+        # set_uc_function_client — but we still set it (best-effort) so UC *execution* can find
+        # the client. Its import path moved between versions, so import it defensively.
+        from unitycatalog.ai.core.databricks import DatabricksFunctionClient
+
+        uc_client = DatabricksFunctionClient(client=w)
+
+        set_uc_function_client = None
+        for _mod in ("unitycatalog.ai.core.base", "unitycatalog.ai.core.client"):
             try:
-                toolkit = UCFunctionToolkit(**toolkit_kwargs)
-            except Exception as inner_e:
-                if "unexpected keyword argument 'client'" in str(inner_e) or "Extra inputs are not permitted" in str(inner_e):
-                    # Try without client if it's not supported by this version
-                    toolkit = UCFunctionToolkit(function_names=func_names)
-                else:
-                    raise inner_e
-        except ImportError:
-            # unitycatalog-ai <= 0.3.x compatibility
+                set_uc_function_client = __import__(_mod, fromlist=["set_uc_function_client"]).set_uc_function_client
+                break
+            except (ImportError, AttributeError):
+                continue
+        if set_uc_function_client is not None:
             try:
-                from databricks_langchain.uc_function_toolkit import set_uc_function_client
-                set_uc_function_client(w)
-                toolkit = UCFunctionToolkit(function_names=func_names)
-            except ImportError:
-                # If set_uc_function_client is not available, some older versions
-                # allow WorkspaceClient to be passed as workspace_client
-                try:
-                    toolkit = UCFunctionToolkit(function_names=func_names, workspace_client=w)
-                except Exception:
-                    try:
-                        toolkit = UCFunctionToolkit(function_names=func_names, client=w)
-                    except Exception:
-                        toolkit = UCFunctionToolkit(function_names=func_names)
+                set_uc_function_client(uc_client)
+            except Exception as e:
+                print(f"Warning: set_uc_function_client failed (non-fatal): {e}")
+
+        toolkit = UCFunctionToolkit(function_names=func_names, client=uc_client)
             
         # Avoid binding two tools with the same name (e.g. a UC function that shares a name
         # with a core local tool already bound above).

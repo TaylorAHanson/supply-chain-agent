@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 interface AvailableTool {
   name: string;
   type: string;
+  always_on?: boolean;
 }
 
 interface ToolsAndSkillsModalProps {
@@ -13,6 +14,8 @@ interface ToolsAndSkillsModalProps {
   selectedSkills: string[];
   onToolsChange: (tools: string[]) => void;
   onSkillsChange: (skills: string[]) => void;
+  userPrompt: string;
+  onUserPromptChange: (prompt: string) => void;
   isLoading: boolean;
 }
 
@@ -27,6 +30,8 @@ const ToolsAndSkillsModal: React.FC<ToolsAndSkillsModalProps> = ({
   selectedSkills,
   onToolsChange,
   onSkillsChange,
+  userPrompt,
+  onUserPromptChange,
   isLoading
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -104,6 +109,35 @@ const ToolsAndSkillsModal: React.FC<ToolsAndSkillsModalProps> = ({
             />
           </div>
 
+          {/* User-level main prompt */}
+          <div className="mb-8 bg-white border border-gray-200 rounded-lg p-6 shadow-sm">
+            <div className="flex items-center mb-3">
+              <div className="w-10 h-10 bg-[#F5F7FF] text-[#3253DC] rounded-md flex items-center justify-center mr-3 border border-[#3253DC]/20">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+              </div>
+              <div>
+                <h3 className="font-bold text-lg text-[#00205B]">Custom Instructions</h3>
+                <p className="text-xs text-gray-500">A user-level prompt appended to the agent's system prompt for every message</p>
+              </div>
+              {userPrompt.trim() && (
+                <button
+                  onClick={() => onUserPromptChange('')}
+                  className="ml-auto text-xs text-gray-400 hover:text-[#E32029] font-medium"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <textarea
+              value={userPrompt}
+              onChange={(e) => onUserPromptChange(e.target.value)}
+              rows={4}
+              placeholder="e.g. Always answer concisely. Default to the prod_analytics catalog. When showing currency, format as USD."
+              className="w-full px-4 py-3 border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-[#3253DC] focus:border-transparent shadow-sm text-sm resize-y font-mono"
+            />
+            <p className="text-[11px] text-gray-400 mt-2">Saved in this browser. Takes precedence over the default instructions, but cannot override safety and tool-usage rules.</p>
+          </div>
+
           {isLoading ? (
             <div className="flex-1 flex items-center justify-center">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#3253DC]"></div>
@@ -126,21 +160,29 @@ const ToolsAndSkillsModal: React.FC<ToolsAndSkillsModalProps> = ({
                 <div className="flex-1 overflow-y-auto pr-2 space-y-2">
                   {filteredTools.length > 0 ? (
                     filteredTools.map((tool, idx) => (
-                      <label key={idx} className="flex items-start bg-gray-50 border border-gray-100 rounded-md p-3 hover:border-[#3253DC]/30 transition-colors cursor-pointer">
+                      <label key={idx} className={`flex items-start border rounded-md p-3 transition-colors ${tool.always_on ? 'bg-[#F5F7FF]/60 border-[#3253DC]/20 cursor-default' : 'bg-gray-50 border-gray-100 hover:border-[#3253DC]/30 cursor-pointer'}`}>
                         <div className="flex items-center h-5 mr-3">
                           <input
                             type="checkbox"
-                            className="w-4 h-4 text-[#3253DC] bg-white border-gray-300 rounded focus:ring-[#3253DC] focus:ring-2"
-                            checked={selectedTools.includes(tool.name)}
-                            onChange={() => handleToolToggle(tool.name)}
+                            className="w-4 h-4 text-[#3253DC] bg-white border-gray-300 rounded focus:ring-[#3253DC] focus:ring-2 disabled:opacity-60"
+                            checked={tool.always_on ? true : selectedTools.includes(tool.name)}
+                            disabled={tool.always_on}
+                            onChange={() => !tool.always_on && handleToolToggle(tool.name)}
                           />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between mb-1">
+                          <div className="flex items-center justify-between mb-1 gap-2">
                             <span className="font-mono text-sm text-gray-800 break-all pr-2">{tool.name}</span>
-                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-[#F5F7FF] text-[#3253DC] border border-[#3253DC]/20 shrink-0">
-                              {tool.type}
-                            </span>
+                            <div className="flex items-center gap-1 shrink-0">
+                              {tool.always_on && (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-green-50 text-green-700 border border-green-200">
+                                  always on
+                                </span>
+                              )}
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-[#F5F7FF] text-[#3253DC] border border-[#3253DC]/20">
+                                {tool.type}
+                              </span>
+                            </div>
                           </div>
                         </div>
                       </label>

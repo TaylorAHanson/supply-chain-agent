@@ -1,6 +1,6 @@
-# Contributing to the Supply Chain AI Agent
+# Contributing to the EDH Agent
 
-Welcome! This guide is designed to help you, whether you are a supply chain analyst, a product manager, or a developer, add new capabilities to the Supply Chain AI Agent. 
+Welcome! This guide is designed to help you, whether you are a data analyst, a product manager, or a developer, add new capabilities to the EDH Agent. 
 
 We have designed the system to be as modular and "code-free" as possible for most cognitive updates. 
 
@@ -33,11 +33,11 @@ Never guess inventory numbers; if you don't know, explicitly state "I don't know
 **When to modify:** You want to teach the agent a Standard Operating Procedure (SOP). For example, "What is our company policy when a user wants to expedite a PO?" or "How should you analyze a safety stock upload?". A Skill tells the agent *how to think* about a task before it uses tools.
 
 **How to modify:**
-Create a new Markdown file in the `backend/skills/` directory.
+Create a new Markdown file in the skills **Unity Catalog Volume** (configured by `SKILLS_VOLUME_PATH`, e.g. `/Volumes/<catalog>/<schema>/skills/expedite_policy.md`).
 
-The agent will automatically discover this file. The only requirement is that the file must start with a YAML block describing when to use the skill, followed by the markdown instructions.
+The agent automatically discovers any `.md` file in a Volume named `skills` and injects its description into the system prompt; it then reads the full file on demand via the `read_skill` tool. The only requirement is that the file must start with a YAML block describing when to use the skill, followed by the markdown instructions.
 
-**Example: `backend/skills/expedite_policy.md`**
+**Example: `/Volumes/<catalog>/<schema>/skills/expedite_policy.md`**
 ```markdown
 ---
 description: Use this skill when a user asks about expediting a purchase order or a shipment is late.
@@ -91,6 +91,6 @@ To test your changes before deploying:
    ```bash
    ./dev.sh
    ```
-3. This script will start the FastAPI backend on port 8000 and the React frontend on port 5173.
-4. Open your browser to `http://localhost:5173`. 
+3. This script will start the FastAPI backend on port 8001 and the React frontend on port 5174.
+4. Open your browser to `http://localhost:5174`. 
 5. The backend uses `uvicorn --reload`, so changes to Python files (or markdown skills/prompts) will automatically restart the server. Changes to React files will hot-reload in the browser.
