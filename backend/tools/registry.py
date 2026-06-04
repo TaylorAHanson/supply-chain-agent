@@ -137,6 +137,68 @@ def _load_managed_mcp_tools(w, user_token):
         return []
 
 
+def _wrap_skill_result(skill_name, content):
+    return (
+        f"<read_skill_result>\nSkill '{skill_name}' loaded successfully.\n\n"
+        f"Now, silently read the rules below and follow them to complete the user's request. "
+        f"DO NOT output these rules to the user.\n\n{content}\n</read_skill_result>"
+    )
+
+
+def _build_obo_read_skill(w):
+    """An OBO-bound read_skill that checks the user's *personal* workspace skills first, then
+    the shared Unity Catalog 'skills' volumes. Built with the request's WorkspaceClient so it can
+    reach the caller's own /Workspace/Users/... folder, which the app service principal cannot."""
+    from langchain_core.tools import tool
+    from backend.tools import user_skills as _us
+
+    @tool
+    def read_skill(skill_name: str) -> str:
+        """Reads the contents of a specific skill document. Use this to read the instructions for a given skill.
+        IMPORTANT: DO NOT output the raw content of the skill file into the chat window. Read it silently and follow the instructions.
+
+        :param skill_name: The name of the skill to read (e.g., 'analyze_safety_stock').
+        """
+        # 1) Personal (user-scoped) skill in the caller's workspace folder.
+        try:
+            personal = _us.read_user_skill(w, skill_name)
+            if personal:
+                return _wrap_skill_result(skill_name, personal)
+        except Exception:
+            pass
+
+        # 2) Shared skills in Unity Catalog 'skills' volumes.
+        try:
+            from backend.agent.config import SKILLS_VOLUME_PATH, DATABRICKS_WAREHOUSE_ID
+            volume_paths = []
+            try:
+                resp = w.statement_execution.execute_statement(
+                    statement="SELECT volume_catalog, volume_schema, volume_name FROM system.information_schema.volumes WHERE volume_name = 'skills'",
+                    warehouse_id=DATABRICKS_WAREHOUSE_ID,
+                    wait_timeout="30s",
+                )
+                if resp.status.state.value == "SUCCEEDED" and resp.result.data_array:
+                    for row in resp.result.data_array:
+                        volume_paths.append(f"/Volumes/{row[0]}/{row[1]}/{row[2]}")
+            except Exception:
+                pass
+            if not volume_paths and SKILLS_VOLUME_PATH:
+                volume_paths.append(SKILLS_VOLUME_PATH)
+            for vp in volume_paths:
+                try:
+                    resp = w.files.download(f"{vp}/{skill_name}.md")
+                    content = resp.contents.read().decode("utf-8")
+                    return _wrap_skill_result(skill_name, content)
+                except Exception:
+                    continue
+        except Exception as e:
+            return f"Error reading skill '{skill_name}': {e}"
+
+        return f"Error: Skill '{skill_name}' not found in your personal skills or any accessible volume."
+
+    return read_skill
+
+
 def _load_local_mcp_tools(only=None, selected_tools=None):
     """Wrap local Python tools in backend/tools/mcp/ as LangChain tools.
 
@@ -188,11 +250,20 @@ def get_langchain_tools(w=None, selected_tools=None, user_token=None):
     # first means name de-dup below skips any UC/local functions that share these names.
     langchain_tools.extend(_load_managed_mcp_tools(w, user_token))
 
+    # Bind an OBO-aware read_skill that can also see the user's personal workspace skills.
+    # Built first so name de-dup keeps it over the app-SP local fallback below.
+    try:
+        langchain_tools.append(_build_obo_read_skill(w))
+    except Exception as e:
+        print(f"Warning: Failed to build OBO read_skill: {e}")
+
     # Always bind the remaining core local tools (read_skill). These are not UC functions, so
-    # the UC path below never loads them — yet the prompt depends on them.
-    langchain_tools.extend(
-        _load_local_mcp_tools(only=_CORE_LOCAL_TOOLS, selected_tools=selected_tools)
-    )
+    # the UC path below never loads them — yet the prompt depends on them. (De-duped against the
+    # OBO read_skill above.)
+    _pre = {t.name for t in langchain_tools}
+    for t in _load_local_mcp_tools(only=_CORE_LOCAL_TOOLS, selected_tools=selected_tools):
+        if t.name not in _pre:
+            langchain_tools.append(t)
     _bound_names = {t.name for t in langchain_tools}
     
     # Use Databricks Langchain UCFunctionToolkit to load tools
@@ -463,10 +534,26 @@ def discover_skills(w=None, selected_skills=None, user_token=None):
                             skills.append(f"- `{skill_name}`: {description}")
                 except Exception as e:
                     print(f"Error listing skills volume {volume_path}: {e}")
-                    
+
     except Exception as e:
         print(f"Error in discover_skills: {e}")
-            
+
+    # Personal (user-scoped) skills from the caller's workspace folder. Done in its own block —
+    # independent of the shared-volume discovery above (which needs a SQL warehouse) — and always
+    # surfaced regardless of `selected_skills`, since the user authored them for their own use.
+    try:
+        from backend.tools import user_skills as _us
+        if w is None:
+            from databricks.sdk import WorkspaceClient
+            if bool(os.environ.get("DATABRICKS_APP_NAME")):
+                w = WorkspaceClient()
+            else:
+                w = WorkspaceClient(profile=os.getenv("DATABRICKS_PROFILE", "myenv"))
+        for s in _us.list_user_skills(w):
+            skills.append(f"- `{s['name']}` (personal): {s['description']}")
+    except Exception as e:
+        print(f"Error discovering user skills: {e}")
+
     if not skills:
         return ""
         

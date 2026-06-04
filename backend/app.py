@@ -60,6 +60,30 @@ class FeedbackRequest(BaseModel):
     rating: int # 1 for upvote, -1 for downvote
     comment: str = None
 
+class UserSkillRequest(BaseModel):
+    name: str
+    content: str = ""
+
+
+def _extract_user_token(req_obj: Request):
+    """Pull the OBO access token out of the inbound request headers, if present."""
+    token = req_obj.headers.get("X-Forwarded-Access-Token") or req_obj.headers.get("x-forwarded-access-token")
+    if not token:
+        token = req_obj.headers.get("X-Forwarded-Authorization")
+    if not token:
+        auth_header = req_obj.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.replace("Bearer ", "")
+    return token
+
+
+def _workspace_client_for(req_obj: Request):
+    """Build a WorkspaceClient scoped to the calling user (OBO), falling back to the app identity."""
+    token = _extract_user_token(req_obj)
+    if token:
+        return WorkspaceClient(host=os.getenv("DATABRICKS_HOST"), token=token, auth_type="pat")
+    return shared_w
+
 # In-memory store for conversational history
 session_history = {}
 
@@ -346,46 +370,60 @@ async def get_tools_and_skills(req_obj: Request):
         
         tools = []
         skills = []
-        
-        # Query for tools (functions)
-        query_tools = """
-        SELECT routine_catalog, routine_schema, routine_name 
-        FROM system.information_schema.routines 
-        WHERE routine_type = 'FUNCTION' AND routine_catalog != 'system'
-        """
-        response_tools = w.statement_execution.execute_statement(
-            statement=query_tools,
-            warehouse_id=DATABRICKS_WAREHOUSE_ID,
-            wait_timeout="30s"
-        )
-        if response_tools.status.state.value == 'SUCCEEDED' and response_tools.result.data_array:
-            for row in response_tools.result.data_array:
-                tool_name = f"{row[0]}.{row[1]}.{row[2]}"
-                tool_type = "Genie Space" if "genie" in row[2].lower() else "UC Function"
-                tools.append({"name": tool_name, "type": tool_type})
-                
-        # Query for skills (volumes named 'skills')
-        query_skills = """
-        SELECT volume_catalog, volume_schema, volume_name 
-        FROM system.information_schema.volumes
-        WHERE volume_name = 'skills'
-        """
-        response_skills = w.statement_execution.execute_statement(
-            statement=query_skills,
-            warehouse_id=DATABRICKS_WAREHOUSE_ID,
-            wait_timeout="30s"
-        )
-        
-        if response_skills.status.state.value == 'SUCCEEDED' and response_skills.result.data_array:
-            for row in response_skills.result.data_array:
-                volume_path = f"/Volumes/{row[0]}/{row[1]}/{row[2]}"
-                try:
-                    files = w.files.list_directory_contents(volume_path)
-                    for file_info in files:
-                        if file_info.path.endswith(".md"):
-                            skills.append(os.path.basename(file_info.path)[:-3])
-                except Exception as e:
-                    print(f"Error listing volume {volume_path}: {e}")
+
+        if not DATABRICKS_WAREHOUSE_ID:
+            # Without a warehouse we can't query information_schema. Don't 500 the whole panel:
+            # the always-on managed-MCP tools and personal skills don't need it.
+            print("Warning: DATABRICKS_WAREHOUSE_ID is not set; skipping UC tool/skill discovery.")
+
+        # Query for tools (functions). Wrapped so a warehouse failure doesn't break the panel —
+        # the always-on managed-MCP tools are still returned below.
+        if DATABRICKS_WAREHOUSE_ID:
+            try:
+                query_tools = """
+                SELECT routine_catalog, routine_schema, routine_name 
+                FROM system.information_schema.routines 
+                WHERE routine_type = 'FUNCTION' AND routine_catalog != 'system'
+                """
+                response_tools = w.statement_execution.execute_statement(
+                    statement=query_tools,
+                    warehouse_id=DATABRICKS_WAREHOUSE_ID,
+                    wait_timeout="30s"
+                )
+                if response_tools.status.state.value == 'SUCCEEDED' and response_tools.result.data_array:
+                    for row in response_tools.result.data_array:
+                        tool_name = f"{row[0]}.{row[1]}.{row[2]}"
+                        tool_type = "Genie Space" if "genie" in row[2].lower() else "UC Function"
+                        tools.append({"name": tool_name, "type": tool_type})
+            except Exception as e:
+                print(f"Warning: UC tool discovery failed: {e}")
+
+        # Query for skills (volumes named 'skills'). Also wrapped — personal skills are served
+        # separately by /user-skills, so a warehouse failure here shouldn't break the panel.
+        if DATABRICKS_WAREHOUSE_ID:
+            try:
+                query_skills = """
+                SELECT volume_catalog, volume_schema, volume_name 
+                FROM system.information_schema.volumes
+                WHERE volume_name = 'skills'
+                """
+                response_skills = w.statement_execution.execute_statement(
+                    statement=query_skills,
+                    warehouse_id=DATABRICKS_WAREHOUSE_ID,
+                    wait_timeout="30s"
+                )
+                if response_skills.status.state.value == 'SUCCEEDED' and response_skills.result.data_array:
+                    for row in response_skills.result.data_array:
+                        volume_path = f"/Volumes/{row[0]}/{row[1]}/{row[2]}"
+                        try:
+                            files = w.files.list_directory_contents(volume_path)
+                            for file_info in files:
+                                if file_info.path.endswith(".md"):
+                                    skills.append(os.path.basename(file_info.path)[:-3])
+                        except Exception as e:
+                            print(f"Error listing volume {volume_path}: {e}")
+            except Exception as e:
+                print(f"Warning: UC skill discovery failed: {e}")
                     
         # Save to cache
         try:
@@ -422,6 +460,74 @@ async def get_tools_and_skills(req_obj: Request):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+# ---------------------------------------------------------------------------
+# User-scoped skills: personal markdown skills stored in the caller's own
+# Databricks workspace folder (/Workspace/Users/{email}/edh_agent_skills/).
+# Managed under the user's OBO identity so each user only sees/edits their own.
+# ---------------------------------------------------------------------------
+@app.get("/user-skills")
+async def list_user_skills_endpoint(req_obj: Request):
+    try:
+        from backend.tools import user_skills
+        w = _workspace_client_for(req_obj)
+        return {"skills": user_skills.list_user_skills(w)}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to list user skills: {str(e)}")
+
+
+@app.get("/user-skills/{name}")
+async def get_user_skill_endpoint(name: str, req_obj: Request):
+    try:
+        from backend.tools import user_skills
+        w = _workspace_client_for(req_obj)
+        content = user_skills.read_user_skill(w, name)
+        if content is None:
+            raise HTTPException(status_code=404, detail=f"Skill '{name}' not found.")
+        return {"name": user_skills.safe_skill_name(name), "content": content}
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to read user skill: {str(e)}")
+
+
+@app.put("/user-skills")
+async def save_user_skill_endpoint(request: UserSkillRequest, req_obj: Request):
+    try:
+        from backend.tools import user_skills
+        if not user_skills.safe_skill_name(request.name):
+            raise HTTPException(status_code=400, detail="A valid skill name is required.")
+        w = _workspace_client_for(req_obj)
+        path = user_skills.write_user_skill(w, request.name, request.content)
+        return {"status": "saved", "name": user_skills.safe_skill_name(request.name), "path": path}
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to save user skill: {str(e)}")
+
+
+@app.delete("/user-skills/{name}")
+async def delete_user_skill_endpoint(name: str, req_obj: Request):
+    try:
+        from backend.tools import user_skills
+        w = _workspace_client_for(req_obj)
+        ok = user_skills.delete_user_skill(w, name)
+        if not ok:
+            raise HTTPException(status_code=404, detail=f"Skill '{name}' not found.")
+        return {"status": "deleted", "name": user_skills.safe_skill_name(name)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to delete user skill: {str(e)}")
+
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):

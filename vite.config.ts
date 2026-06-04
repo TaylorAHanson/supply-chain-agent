@@ -16,7 +16,8 @@ export default defineConfig({
       '/upload': 'http://127.0.0.1:8001',
       '/clear_chat': 'http://127.0.0.1:8001',
       '/feedback': 'http://127.0.0.1:8001',
-      '/tools-and-skills': 'http://127.0.0.1:8001'
+      '/tools-and-skills': 'http://127.0.0.1:8001',
+      '/user-skills': 'http://127.0.0.1:8001'
     }
   }
 })

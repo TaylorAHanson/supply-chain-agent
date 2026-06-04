@@ -107,6 +107,14 @@ Tools and skills are resolved at agent initialization by `backend/tools/registry
 - **Discovery:** `discover_skills()` lists `.md` files across volumes named `skills` and injects their descriptions into the system prompt.
 - **Execution:** The agent uses the `read_skill` tool to read a skill's full instructions on demand, then executes them with the native tools.
 
+#### Personal (user-scoped) skills
+
+In addition to the shared UC-volume skills, each user can author **private** skills stored in their own Databricks **workspace folder** — `/Workspace/Users/<email>/edh_agent_skills/<name>.md` — a location every user is guaranteed to have write access to.
+
+- **Management:** The **Tools & Skills** panel has a **My Personal Skills** section (`src/UserSkillsManager.tsx`) with a `+ New Skill` button plus inline list / edit / delete. These call the CRUD endpoints `GET|PUT|DELETE /user-skills` in `backend/app.py`, which operate via the **workspace-files API** under the caller's OBO identity (`backend/tools/user_skills.py`), so users only ever see and edit their own skills.
+- **Discovery:** `discover_skills()` appends personal skills (tagged `(personal)`) to the system prompt regardless of `selected_skills` — the user authored them for their own use, so they are always available.
+- **Execution:** `read_skill` is bound as an **OBO-aware** tool (`registry._build_obo_read_skill`) that checks the caller's personal workspace skills **first**, then falls back to the shared UC `skills` volumes. (The app service principal can't read a user's workspace folder, so this tool must run under the user's token.)
+
 ### B. Tools
 
 The agent binds three kinds of tools (in this priority order; names are de-duplicated so the first binding wins):
@@ -158,11 +166,13 @@ The agent streams responses over SSE and surfaces its intermediate reasoning to 
 │   │   └── prompt.md          # Core agent system prompt
 │   └── tools/
 │       ├── managed_mcp.py     # Databricks managed MCP client + SQL/Genie tool wrappers (OBO)
+│       ├── user_skills.py     # Personal skill CRUD in the user's workspace folder (OBO)
 │       ├── mcp/               # Local Python tools (read_skill.py + legacy SQL/Genie fallbacks)
 │       └── registry.py        # Dynamic tool/skill discovery (managed MCP + UC functions + local)
 ├── src/                       # React frontend
 │   ├── App.tsx                # Chat UI, SSE handling, Thoughts panel, tool badges, custom instructions
 │   ├── ToolsAndSkillsModal.tsx       # Tools/skills picker + user-level Custom Instructions box
+│   ├── UserSkillsManager.tsx         # Personal skills: create / list / edit / delete
 │   └── ArchitecturePresentation.tsx  # In-app architecture slideshow
 ├── evals/
 │   ├── run_llm_judge.py       # LLM-as-judge evaluation over inference-table traces
@@ -296,6 +306,10 @@ data: [DONE]
 | `POST /clear_chat` | Clear in-memory conversation history for a session |
 | `POST /feedback` | Submit a thumbs up/down rating (by `trace_id`) |
 | `GET /tools-and-skills` | List the tools and skills available to the user |
+| `GET /user-skills` | List the caller's personal (workspace-folder) skills |
+| `GET /user-skills/{name}` | Read one personal skill's markdown content |
+| `PUT /user-skills` | Create or update a personal skill (`{name, content}`) |
+| `DELETE /user-skills/{name}` | Delete a personal skill |
 | `POST /upload` | Upload a file (CSV/XLSX) for processing |
 
 ---

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import UserSkillsManager from './UserSkillsManager';
 
 interface AvailableTool {
   name: string;
@@ -229,6 +230,9 @@ const ToolsAndSkillsModal: React.FC<ToolsAndSkillsModalProps> = ({
               </div>
             </div>
           )}
+
+          {/* Personal (user-scoped) skills */}
+          <UserSkillsManager />
 
           {/* Explanation Section */}
           <div className="mt-8 border border-gray-200 rounded-lg bg-white overflow-hidden shadow-sm shrink-0">
