@@ -121,14 +121,14 @@ The agent binds three kinds of tools (in this priority order; names are de-dupli
 
 - **Databricks managed MCP tools (SQL + Genie):** `registry.py` connects to the workspace's **managed MCP servers** and binds them first:
   - `query_lakehouse` → the SQL MCP server (`/api/2.0/mcp/sql`, `execute_sql_read_only` + `poll_sql_result`).
-  - `ask_genie` / `list_genies` → the Genie MCP server (`/api/2.0/mcp/genie/{space_id}`, `query_space_*` + `poll_response_*`).
+  - `ask_genie` / `list_genies` → the Genie MCP server. By default `ask_genie` uses the **workspace-wide** server (`/api/2.0/mcp/genie`, `genie_ask` + `genie_poll_response`), which searches across all of the user's Genie spaces; pass an optional `space_id` to target one space (`/api/2.0/mcp/genie/{space_id}`, `query_space_*` + `poll_response_*`).
   These call under the user's **OBO token** for governance parity. `backend/tools/managed_mcp.py` holds a small stateless JSON-RPC client (`requests`-only) plus the tool wrappers. Genie and long SQL statements are asynchronous (ask/execute → poll), and the **poll loop is handled inside the tool**, so the agent makes one blocking call and gets the final answer instead of dozens of poll round-trips. (See "Genie long-running flow" below.)
 - **Unity Catalog functions:** `registry.py` queries `system.information_schema.routines` for functions in the configured `CATALOG_SCHEMA` and loads them with `databricks-langchain`'s `UCFunctionToolkit`. Results are cached in `tools_skills_cache.db`. Any UC function whose name collides with a managed-MCP tool is skipped.
 - **Core local Python tools (always bound):** `read_skill` lives in `backend/tools/mcp/` and is **always** bound (the system prompt depends on it, and it is not a UC function). The legacy local SQL/Genie tools (`query_lakehouse.py`, `ask_genie.py`, `list_genies.py`) remain as a latent fallback that only loads if both managed MCP and UC discovery are unavailable.
 
 #### Genie long-running flow
 
-The Genie MCP server is a two-tool async pattern: `query_space_{space_id}(query)` starts a turn and returns `conversationId` + `messageId` (`status="ASKING_AI"`), then `poll_response_{space_id}(conversation_id, message_id)` is called repeatedly until `status="COMPLETED"` (turns typically take ~1-5 minutes). `ask_genie` runs this loop internally (≈4s between polls, ~6 min cap) and returns the natural-language answer plus any SQL result table. The workspace-wide `genie_ask` tool is equivalent but currently hidden by a Databricks bug, so we target the per-space path which is unaffected.
+The Genie MCP server is a two-tool async pattern: an **ask** call starts a turn and returns a `conversation_id` + `response_id` (`status="in_progress"`), then a **poll** call is made repeatedly until a terminal `status` (`completed` / `failed`). `ask_genie` runs this loop internally (≈4s between polls, ~6 min cap) and returns the natural-language answer (`final_answer`) plus any SQL result table. By default it calls the **workspace-wide** `genie_ask` / `genie_poll_response` (Genie chooses/searches the relevant spaces itself — preferred); when a `space_id` is supplied it instead drives the per-space `query_space_{id}` / `poll_response_{id}` pair. Status comparisons are case-insensitive so both shapes (`COMPLETED` vs `completed`) work.
 
 ---
 

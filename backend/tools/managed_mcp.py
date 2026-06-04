@@ -31,6 +31,18 @@ _GENIE_SPACES_TTL_S = 300
 GENIE_TERMINAL_OK = {"COMPLETED"}
 GENIE_TERMINAL_BAD = {"FAILED", "CANCELLED", "CANCELED", "QUERY_RESULT_EXPIRED"}
 
+
+def _genie_status_ok(status) -> bool:
+    return (status or "").upper() in GENIE_TERMINAL_OK
+
+
+def _genie_status_bad(status) -> bool:
+    return (status or "").upper() in GENIE_TERMINAL_BAD
+
+
+def _genie_terminal(status) -> bool:
+    return _genie_status_ok(status) or _genie_status_bad(status)
+
 # Transient HTTP statuses worth retrying (rate limiting + gateway/backend hiccups).
 _RETRY_STATUSES = {429, 500, 502, 503, 504}
 _MAX_RETRIES = 2
@@ -224,7 +236,8 @@ def build_genie_tools(client: "ManagedMCPClient", w=None):
     def list_genies() -> str:
         """List the Databricks Genie spaces you can access, with their names, descriptions, and space_ids.
 
-        Call this first to find the right `space_id` before calling `ask_genie`.
+        Optional: `ask_genie` searches across all of your Genie spaces by default, so you usually do
+        NOT need this. Use it only when you want to *target* one specific space by `space_id`.
         """
         if w is None:
             return "Error: no Databricks client available to list Genie spaces."
@@ -252,45 +265,99 @@ def build_genie_tools(client: "ManagedMCPClient", w=None):
         return result
 
     @tool
-    def ask_genie(space_id: str, question: str) -> str:
-        """Ask a natural-language data/analytics question to a specific Databricks Genie space.
+    def ask_genie(question: str, space_id: str = "") -> str:
+        """Ask a natural-language data/analytics question to Databricks Genie.
 
-        Use this for complex analytical questions best answered by Genie. Provide the `space_id`
-        (use `list_genies` to find it). This call blocks until Genie finishes (typically 1-5 minutes).
+        By DEFAULT Genie searches across **all** of your accessible Genie spaces / enterprise data
+        and writes the SQL itself — you do NOT need to choose a space. This is the preferred way to
+        ask analytical questions. Optionally pass a `space_id` (from `list_genies`) to restrict the
+        question to one specific space. Blocks until Genie finishes (typically 1-5 minutes).
         """
-        if not space_id or not question:
-            return "Error: both space_id and question are required."
-        path = f"/api/2.0/mcp/genie/{space_id}"
-        ask_name = f"query_space_{space_id}"
-        poll_name = f"poll_response_{space_id}"
+        if not question:
+            return "Error: question is required."
+
+        if space_id:
+            # Target a single space (per-space MCP server).
+            path = f"/api/2.0/mcp/genie/{space_id}"
+            ask_name = f"query_space_{space_id}"
+            poll_name = f"poll_response_{space_id}"
+            ask_args = {"query": question}
+        else:
+            # Workspace-wide Genie: searches across spaces and grounds its own answer.
+            path = "/api/2.0/mcp/genie"
+            ask_name = "genie_ask"
+            poll_name = "genie_poll_response"
+            ask_args = {"question": question}
+
         try:
-            sc = client.call_tool(path, ask_name, {"query": question}, timeout=120)
+            sc = client.call_tool(path, ask_name, ask_args, timeout=120)
         except ManagedMCPError as e:
             return f"Error asking Genie: {e}"
 
-        conv_id = sc.get("conversationId") or sc.get("conversation_id")
-        msg_id = sc.get("messageId") or sc.get("message_id")
+        conv_id = sc.get("conversation_id") or sc.get("conversationId")
+        resp_id = (
+            sc.get("response_id") or sc.get("responseId")
+            or sc.get("message_id") or sc.get("messageId")
+        )
         status = sc.get("status")
 
         waited = 0
-        while status not in GENIE_TERMINAL_OK and status not in GENIE_TERMINAL_BAD:
-            if not conv_id or not msg_id:
-                return "Genie did not return a conversation/message id to poll."
+        while not _genie_terminal(status):
+            if not conv_id or not resp_id:
+                return "Genie did not return a conversation/response id to poll."
             if waited >= _GENIE_MAX_WAIT_S:
                 return f"Genie is still processing after {_GENIE_MAX_WAIT_S}s. Try again or narrow the question."
             time.sleep(_GENIE_POLL_INTERVAL_S)
             waited += _GENIE_POLL_INTERVAL_S
+            # Per-space polls key on message_id; workspace-wide polls key on response_id.
+            poll_args = (
+                {"conversation_id": conv_id, "message_id": resp_id}
+                if space_id else
+                {"conversation_id": conv_id, "response_id": resp_id}
+            )
             try:
-                sc = client.call_tool(path, poll_name, {"conversation_id": conv_id, "message_id": msg_id}, timeout=60)
+                sc = client.call_tool(path, poll_name, poll_args, timeout=60)
             except ManagedMCPError as e:
                 return f"Error polling Genie: {e}"
             status = sc.get("status")
 
-        if status in GENIE_TERMINAL_BAD:
+        if _genie_status_bad(status):
             return f"Genie could not answer (status={status})."
-        return _format_genie_answer(sc)
+        return _render_genie_answer(sc)
 
     return [list_genies, ask_genie]
+
+
+def _render_genie_answer(sc: dict) -> str:
+    """Render a completed Genie response from either Genie MCP shape.
+
+    Workspace-wide ``genie_ask`` returns ``final_answer`` (markdown) plus optional ``query_items``;
+    the per-space server returns ``content.textAttachments`` / ``content.queryAttachments``.
+    """
+    final = sc.get("final_answer")
+    if final:
+        parts = [final if isinstance(final, str) else str(final)]
+        parts.extend(_render_query_items(sc.get("query_items")))
+        return "\n\n".join(p for p in parts if p)
+    return _format_genie_answer(sc)
+
+
+def _render_query_items(items) -> list:
+    """Best-effort render of workspace-wide ``query_items`` (SQL + results attachments)."""
+    out = []
+    for it in items or []:
+        if isinstance(it, dict):
+            desc = it.get("description") or it.get("title")
+            if desc:
+                out.append(str(desc))
+            stmt = it.get("statement_response")
+            if isinstance(stmt, dict):
+                out.append(_format_statement_result(stmt))
+            elif it.get("query"):
+                out.append(f"```sql\n{it['query']}\n```")
+        elif it:
+            out.append(str(it))
+    return out
 
 
 def _format_genie_answer(sc: dict) -> str:

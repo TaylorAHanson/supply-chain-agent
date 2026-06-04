@@ -20,6 +20,7 @@ from backend.tools.managed_mcp import (
     _parse_jsonrpc_payload,
     _format_statement_result,
     _format_genie_answer,
+    _render_genie_answer,
     _cell,
 )
 
@@ -130,7 +131,23 @@ def _ask_tool(client):
     return [t for t in build_genie_tools(client, w=None) if t.name == "ask_genie"][0]
 
 
-def test_genie_ask_then_poll_until_complete():
+def test_genie_ask_workspace_wide_default():
+    # No space_id -> preferred workspace-wide genie_ask/genie_poll_response (status is lowercase).
+    client = _ScriptedClient({
+        "genie_ask": [{"conversation_id": "c1", "response_id": "r1", "status": "in_progress"}],
+        "genie_poll_response": [
+            {"status": "in_progress", "conversation_id": "c1", "response_id": "r1"},
+            {"status": "completed", "final_answer": "There are 42 tables."},
+        ],
+    })
+    out = _ask_tool(client).invoke({"question": "how many tables?"})
+    assert "42 tables" in out
+    assert client.calls[0][0] == "genie_ask"
+    assert client.calls.count(("genie_poll_response", {"conversation_id": "c1", "response_id": "r1"})) == 2
+
+
+def test_genie_ask_targeted_space():
+    # space_id provided -> per-space query_space_/poll_response_ path.
     client = _ScriptedClient({
         "query_space_SP": [{"conversationId": "c1", "messageId": "m1", "status": "ASKING_AI"}],
         "poll_response_SP": [
@@ -138,25 +155,36 @@ def test_genie_ask_then_poll_until_complete():
             {"status": "COMPLETED", "content": {"textAttachments": ["The answer is 10."], "queryAttachments": []}},
         ],
     })
-    out = _ask_tool(client).invoke({"space_id": "SP", "question": "how many?"})
+    out = _ask_tool(client).invoke({"question": "how many?", "space_id": "SP"})
     assert "The answer is 10." in out
-    # ask + 2 polls
     assert client.calls[0][0] == "query_space_SP"
     assert client.calls.count(("poll_response_SP", {"conversation_id": "c1", "message_id": "m1"})) == 2
 
 
 def test_genie_ask_terminal_failure():
     client = _ScriptedClient({
-        "query_space_SP": [{"conversationId": "c", "messageId": "m", "status": "FAILED"}],
+        "genie_ask": [{"conversation_id": "c", "response_id": "r", "status": "failed"}],
     })
-    out = _ask_tool(client).invoke({"space_id": "SP", "question": "q"})
+    out = _ask_tool(client).invoke({"question": "q"})
     assert "could not answer" in out.lower()
 
 
-def test_genie_ask_requires_args():
+def test_genie_ask_requires_question():
     client = _ScriptedClient({})
-    out = _ask_tool(client).invoke({"space_id": "", "question": "q"})
+    out = _ask_tool(client).invoke({"question": ""})
     assert "required" in out.lower()
+
+
+def test_render_genie_answer_workspace_shape():
+    sc = {"final_answer": "Top answer", "query_items": [{
+        "description": "rows",
+        "statement_response": {
+            "manifest": {"schema": {"columns": [{"name": "c"}]}},
+            "result": {"data_array": [{"values": [{"string_value": "9"}]}]},
+        },
+    }]}
+    out = _render_genie_answer(sc)
+    assert "Top answer" in out and "rows" in out and "9" in out
 
 
 def test_format_genie_answer_with_query_attachment():
