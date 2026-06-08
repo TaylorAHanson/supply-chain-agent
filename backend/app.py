@@ -76,8 +76,17 @@ class GenieResumeRequest(BaseModel):
 
 
 def _extract_user_token(req_obj: Request):
-    """Pull the OBO access token out of the inbound request headers, if present."""
-    token = req_obj.headers.get("X-Forwarded-Access-Token") or req_obj.headers.get("x-forwarded-access-token")
+    """Pull the OBO access token out of the inbound request headers, if present.
+
+    Order matters for app-to-app calls: when another Databricks App (e.g. the Command Center)
+    proxies to us, this app's OWN OAuth proxy STRIPS/overwrites the standard `X-Forwarded-*`
+    headers, so the caller forwards the user token under a custom `X-OBO-Token` header that the
+    platform leaves untouched. We check that first, then fall back to the standard headers used
+    when a user hits this app directly.
+    """
+    token = req_obj.headers.get("X-OBO-Token") or req_obj.headers.get("x-obo-token")
+    if not token:
+        token = req_obj.headers.get("X-Forwarded-Access-Token") or req_obj.headers.get("x-forwarded-access-token")
     if not token:
         token = req_obj.headers.get("X-Forwarded-Authorization")
     if not token:
@@ -173,16 +182,10 @@ async def submit_feedback(request: FeedbackRequest):
 async def chat(request: ChatRequest, req_obj: Request):
     try:
         print(f"DEBUG Headers: {req_obj.headers}")
-        # Extract user token for OBO (On-Behalf-Of) authentication
-        user_token = req_obj.headers.get("X-Forwarded-Access-Token")
-        if not user_token:
-            user_token = req_obj.headers.get("x-forwarded-access-token")
-        if not user_token:
-            user_token = req_obj.headers.get("X-Forwarded-Authorization")
-        if not user_token:
-            auth_header = req_obj.headers.get("Authorization")
-            if auth_header and auth_header.startswith("Bearer "):
-                user_token = auth_header.replace("Bearer ", "")
+        # Extract user token for OBO (On-Behalf-Of) authentication. Checks the custom X-OBO-Token
+        # header first so app-to-app callers (Command Center) survive this app's OAuth proxy
+        # stripping the standard X-Forwarded-* headers.
+        user_token = _extract_user_token(req_obj)
         
         # Manage Session History
         if request.session_id not in session_history:
@@ -426,16 +429,8 @@ def _with_always_on_tools(tools):
 
 @app.get("/tools-and-skills")
 async def get_tools_and_skills(req_obj: Request):
-    user_token = req_obj.headers.get("X-Forwarded-Access-Token")
-    if not user_token:
-        user_token = req_obj.headers.get("x-forwarded-access-token")
-    if not user_token:
-        user_token = req_obj.headers.get("X-Forwarded-Authorization")
-    if not user_token:
-        auth_header = req_obj.headers.get("Authorization")
-        if auth_header and auth_header.startswith("Bearer "):
-            user_token = auth_header.replace("Bearer ", "")
-            
+    user_token = _extract_user_token(req_obj)
+    
     # Optional SQLite cache for tools and skills
     import sqlite3
     import hashlib
