@@ -295,9 +295,12 @@ def build_genie_tools(client: "ManagedMCPClient", w=None):
             poll_name = "genie_poll_response"
             ask_args = {"question": question}
 
+        mode = f"space={space_id}" if space_id else "workspace-wide"
+        print(f"[ask_genie] start ({mode}) q={question[:80]!r}", flush=True)
         try:
             sc = client.call_tool(path, ask_name, ask_args, timeout=120)
         except ManagedMCPError as e:
+            print(f"[ask_genie] ask FAILED: {e}", flush=True)
             return f"Error asking Genie: {e}"
 
         conv_id = sc.get("conversation_id") or sc.get("conversationId")
@@ -306,12 +309,19 @@ def build_genie_tools(client: "ManagedMCPClient", w=None):
             or sc.get("message_id") or sc.get("messageId")
         )
         status = sc.get("status")
+        print(
+            f"[ask_genie] asked: status={status!r} conv_id={conv_id!r} resp_id={resp_id!r} "
+            f"keys={list(sc.keys())}",
+            flush=True,
+        )
 
         waited = 0
         while not _genie_terminal(status):
             if not conv_id or not resp_id:
+                print("[ask_genie] no conversation/response id to poll; aborting", flush=True)
                 return "Genie did not return a conversation/response id to poll."
             if waited >= _GENIE_MAX_WAIT_S:
+                print(f"[ask_genie] TIMEOUT after {waited}s (status={status!r})", flush=True)
                 return f"Genie is still processing after {_GENIE_MAX_WAIT_S}s. Try again or narrow the question."
             time.sleep(_GENIE_POLL_INTERVAL_S)
             waited += _GENIE_POLL_INTERVAL_S
@@ -324,11 +334,15 @@ def build_genie_tools(client: "ManagedMCPClient", w=None):
             try:
                 sc = client.call_tool(path, poll_name, poll_args, timeout=60)
             except ManagedMCPError as e:
+                print(f"[ask_genie] poll FAILED at {waited}s: {e}", flush=True)
                 return f"Error polling Genie: {e}"
             status = sc.get("status")
+            print(f"[ask_genie] poll {waited}s: status={status!r}", flush=True)
 
         if _genie_status_bad(status):
+            print(f"[ask_genie] terminal BAD status={status!r}", flush=True)
             return f"Genie could not answer (status={status})."
+        print(f"[ask_genie] COMPLETED in ~{waited}s", flush=True)
         return _render_genie_answer(sc)
 
     return [list_genies, ask_genie]

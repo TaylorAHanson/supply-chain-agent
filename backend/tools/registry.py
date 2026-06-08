@@ -1,5 +1,28 @@
 import inspect
 
+# Shared schema for the tools/skills SQLite cache. It used to be created ONLY by app.py's
+# /tools-and-skills endpoint, so when registry.py opened a freshly-created DB first (common now
+# that tools_skills_cache.db isn't tracked in git) its INSERT/SELECT failed with
+# "no such table: cache". `_connect_cache` makes every opener self-sufficient.
+_CACHE_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS cache (
+        token_hash TEXT PRIMARY KEY,
+        tools TEXT,
+        skills TEXT,
+        timestamp REAL
+    )
+"""
+
+
+def _connect_cache(cache_db_path):
+    """Open the tools/skills cache DB, ensuring the `cache` table exists."""
+    import sqlite3
+    conn = sqlite3.connect(cache_db_path)
+    conn.execute(_CACHE_SCHEMA)
+    conn.commit()
+    return conn
+
+
 def get_openai_tool_schema(func):
     """
     Dynamically generates an OpenAI function calling schema from a Python function's signature and docstring.
@@ -293,7 +316,7 @@ def get_langchain_tools(w=None, selected_tools=None, user_token=None):
         cache_hit = False
         try:
             if os.path.exists(cache_db_path):
-                conn = sqlite3.connect(cache_db_path)
+                conn = _connect_cache(cache_db_path)
                 cursor = conn.cursor()
                 cursor.execute("SELECT tools, timestamp FROM cache WHERE token_hash = ?", (token_hash,))
                 row = cursor.fetchone()
@@ -353,7 +376,7 @@ def get_langchain_tools(w=None, selected_tools=None, user_token=None):
         # Save to cache if not already populated by the endpoint
         if not cache_hit:
             try:
-                conn = sqlite3.connect(cache_db_path)
+                conn = _connect_cache(cache_db_path)
                 cursor = conn.cursor()
                 cursor.execute(
                     "INSERT OR REPLACE INTO cache (token_hash, tools, skills, timestamp) VALUES (?, ?, ?, ?)",
@@ -443,7 +466,7 @@ def discover_skills(w=None, selected_skills=None, user_token=None):
         volume_paths = []
         try:
             if os.path.exists(cache_db_path):
-                conn = sqlite3.connect(cache_db_path)
+                conn = _connect_cache(cache_db_path)
                 cursor = conn.cursor()
                 cursor.execute("SELECT skills, timestamp FROM cache WHERE token_hash = ?", (token_hash,))
                 row = cursor.fetchone()

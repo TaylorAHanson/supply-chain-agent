@@ -266,6 +266,10 @@ class EDHAgent(ResponsesAgent):
 
     def load_context(self, context=None, user_token=None, selected_tools=None, selected_skills=None, user_prompt=None):
         import os
+        import time
+        _auth_mode = "OBO(user)" if user_token else "SP/profile"
+        _t_load = time.monotonic()
+        print(f"[timing] load_context start: auth={_auth_mode}", flush=True)
         from databricks.sdk import WorkspaceClient
         from langchain_openai import ChatOpenAI
         from langchain.agents import create_agent
@@ -327,7 +331,9 @@ class EDHAgent(ResponsesAgent):
             system_prompt = "You are the EDH Agent, an enterprise data assistant for Qualcomm running in Databricks."
         
         # Get Skills
+        _t = time.monotonic()
         system_prompt += discover_skills(w=self.w, selected_skills=selected_skills, user_token=user_token)
+        print(f"[timing] discover_skills: {time.monotonic() - _t:.1f}s ({_auth_mode})", flush=True)
 
         # Append the user-supplied main prompt last so it takes precedence over the
         # baked-in instructions (without letting it silently discard tool/skill guidance).
@@ -340,12 +346,23 @@ class EDHAgent(ResponsesAgent):
             )
 
         # Get Tools
+        _t = time.monotonic()
         tools = get_langchain_tools(w=self.w, selected_tools=selected_tools, user_token=user_token)
+        print(
+            f"[timing] get_langchain_tools: {time.monotonic() - _t:.1f}s "
+            f"({len(tools)} tools, {_auth_mode})",
+            flush=True,
+        )
         
         # Create the LangGraph agent. The tool-error middleware keeps a single failing tool
         # call (bad args, permissions, etc.) from crashing the whole streamed response.
         self.agent = create_agent(
             llm, tools, system_prompt=system_prompt, middleware=_build_tool_error_middleware()
+        )
+        print(
+            f"[timing] load_context total: {time.monotonic() - _t_load:.1f}s "
+            f"(streaming={self.streaming_enabled}, {_auth_mode})",
+            flush=True,
         )
 
     def predict(self, request: ResponsesAgentRequest) -> ResponsesAgentResponse:
@@ -412,7 +429,11 @@ class EDHAgent(ResponsesAgent):
         Streams the final answer as text deltas, and surfaces the agent's intermediate
         steps (extended-thinking content + tool calls) as reasoning deltas.
         """
+        import time
         from langchain_core.messages import AIMessageChunk, ToolMessage
+
+        _t_run = time.monotonic()
+        _tool_started_at = {}  # tool name -> monotonic start (for per-tool wall time)
 
         answer_item_id = str(uuid.uuid4())
         reasoning_item_id = str(uuid.uuid4())
@@ -456,6 +477,8 @@ class EDHAgent(ResponsesAgent):
             if not (name and name.strip()) or name in announced_tools:
                 return None
             announced_tools.add(name)
+            _tool_started_at[name] = time.monotonic()
+            print(f"[timing] tool call '{name}' started at +{time.monotonic() - _t_run:.1f}s", flush=True)
             tool_calls_executed.append({"tool_name": name, "status": "executed inside agent"})
             return self._reasoning_event(f"Using {name}\n", reasoning_item_id)
 
@@ -466,9 +489,16 @@ class EDHAgent(ResponsesAgent):
                 event = reclassify_pending()
                 if event is not None:
                     yield event
-                event = announce_tool(getattr(chunk, "name", None))
+                _tname = getattr(chunk, "name", None)
+                event = announce_tool(_tname)
                 if event is not None:
                     yield event
+                if _tname in _tool_started_at:
+                    print(
+                        f"[timing] tool '{_tname}' returned after "
+                        f"{time.monotonic() - _tool_started_at[_tname]:.1f}s",
+                        flush=True,
+                    )
                 continue
 
             if not isinstance(chunk, AIMessageChunk):
@@ -526,6 +556,11 @@ class EDHAgent(ResponsesAgent):
                 **self.create_text_delta(delta=tail, item_id=answer_item_id)
             )
 
+        print(
+            f"[timing] agent run total: {time.monotonic() - _t_run:.1f}s "
+            f"(tools: {[t['tool_name'] for t in tool_calls_executed]})",
+            flush=True,
+        )
         yield ResponsesAgentStreamEvent(
             type="response.output_item.done",
             item=self.create_text_output_item(text=_clean_text(answer_text), id=answer_item_id),
