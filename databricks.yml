@@ -62,6 +62,11 @@ resources:
             value: "all"
           - name: DEFAULT_SKILLS
             value: "all"
+          # Streaming control: "auto" streams unless output (post-LLM) guardrails are detected;
+          # "true" always streams; "false" never streams. Use "false" to guarantee Unity AI
+          # Gateway post-LLM guardrails are enforced (streaming silently bypasses them).
+          - name: STREAMING_ENABLED
+            value: "auto"
 
   jobs:
     llm_judge_evaluator:

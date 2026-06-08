@@ -266,9 +266,17 @@ def get_langchain_tools(w=None, selected_tools=None, user_token=None):
             langchain_tools.append(t)
     _bound_names = {t.name for t in langchain_tools}
     
-    # Use Databricks Langchain UCFunctionToolkit to load tools
+    # Use Databricks Langchain UCFunctionToolkit to load tools.
+    # Import from the underlying module (`unitycatalog.ai.langchain.toolkit`) rather than the
+    # top-level `databricks_langchain` package: importing `databricks_langchain` eagerly pulls in
+    # its vector-search client, which raises `cannot import name 'VectorSearchIndex'` when the
+    # deployed `databricks-vectorsearch` version is incompatible — taking down ALL UC tool loading
+    # even though we never touch vector search. Fall back to the package import if the layout differs.
     try:
+        from unitycatalog.ai.langchain.toolkit import UCFunctionToolkit
+    except Exception:
         from databricks_langchain import UCFunctionToolkit
+    try:
         from backend.agent.config import CATALOG_SCHEMA
         from databricks.sdk import WorkspaceClient
         

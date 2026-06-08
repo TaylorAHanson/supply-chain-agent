@@ -20,35 +20,59 @@ from backend.agent.config import CATALOG_SCHEMA, MAX_TOKENS, MAX_ITERATIONS, LLM
 _OUTPUT_GUARDRAIL_CACHE: dict[str, bool] = {}
 
 
-def _has_output_guardrails(w, endpoint_name) -> bool:
-    """Return True if the serving endpoint has AI Gateway output guardrails configured.
+def _serving_endpoint_has_output_guardrails(w, endpoint_name) -> bool:
+    """Classic Model Serving + AI Gateway config attached to a /serving-endpoints endpoint.
 
-    AI Gateway routes with output guardrails buffer the full response to inspect it, so
-    they cannot stream token-by-token. We use this to decide whether to stream.
-    Any failure to introspect the endpoint is treated as "no guardrails" so we default
-    to streaming (direct foundation model endpoints stream fine).
-
-    The result is cached per process so this costs at most one API call per endpoint.
+    Such endpoints buffer the full response to apply output guardrails, so they can't stream.
     """
-    if endpoint_name in _OUTPUT_GUARDRAIL_CACHE:
-        return _OUTPUT_GUARDRAIL_CACHE[endpoint_name]
-
     try:
         endpoint = w.serving_endpoints.get(endpoint_name)
         ai_gateway = getattr(endpoint, "ai_gateway", None)
         guardrails = getattr(ai_gateway, "guardrails", None) if ai_gateway else None
         output = getattr(guardrails, "output", None) if guardrails else None
-        # output is AiGatewayGuardrailParameters; it is only "active" if at least one
-        # guardrail dimension is actually configured.
-        result = output is not None and any(
+        # output is AiGatewayGuardrailParameters; only "active" if a dimension is configured.
+        return output is not None and any(
             getattr(output, attr, None)
             for attr in ("invalid_keywords", "pii", "safety", "valid_topics")
         )
     except Exception:
-        result = False
+        return False
 
+
+def _has_output_guardrails(w, endpoint_name) -> bool:
+    """Return True if the endpoint has *output* (post-LLM) guardrails that require non-streaming.
+
+    Auto-detection only covers the classic Model Serving (`/serving-endpoints`) surface, where
+    the SDK exposes the AI Gateway config. **Unity AI Gateway** endpoints (the
+    `/ai-gateway/mlflow/v1` surface) are NOT introspectable here — they don't appear under
+    `serving_endpoints`, and there's no stable guardrails REST path we can rely on — so for those
+    you must set `STREAMING_ENABLED=false` explicitly to enforce post-LLM guardrails (Unity AI
+    Gateway silently skips them on streamed responses). See `_resolve_streaming_enabled`.
+
+    Cached per process (guardrail config is static for the app's lifetime). Any failure to
+    introspect is treated as "no guardrails" so we default to streaming.
+    """
+    if endpoint_name in _OUTPUT_GUARDRAIL_CACHE:
+        return _OUTPUT_GUARDRAIL_CACHE[endpoint_name]
+
+    result = _serving_endpoint_has_output_guardrails(w, endpoint_name)
     _OUTPUT_GUARDRAIL_CACHE[endpoint_name] = result
     return result
+
+
+def _resolve_streaming_enabled(w, endpoint_name) -> bool:
+    """Decide whether to stream. Explicit env override wins; otherwise auto-detect guardrails.
+
+    ``STREAMING_ENABLED`` = ``true``/``false`` forces the choice (use ``false`` to guarantee
+    Unity AI Gateway post-LLM guardrails are enforced, since streaming bypasses them). Anything
+    else (incl. unset / ``auto``) falls back to guardrail auto-detection.
+    """
+    override = os.getenv("STREAMING_ENABLED", "auto").strip().lower()
+    if override in ("true", "1", "yes", "on"):
+        return True
+    if override in ("false", "0", "no", "off"):
+        return False
+    return not _has_output_guardrails(w, endpoint_name)
 
 
 def _extract_text(message) -> str:
@@ -269,9 +293,11 @@ class EDHAgent(ResponsesAgent):
         if is_app and host and not host.startswith("http"):
             host = f"https://{host}"
         
-        # AI Gateway routes with output guardrails must buffer the full response to inspect
-        # it, so they can't stream. Detect this and only stream when guardrails are absent.
-        self.streaming_enabled = not _has_output_guardrails(self.w, LLM_MODEL_NAME)
+        # Decide streaming: explicit STREAMING_ENABLED env wins; otherwise auto-detect output
+        # guardrails on either endpoint surface (Model Serving or Unity AI Gateway). Output
+        # guardrails require non-streaming so they actually run (Unity AI Gateway silently skips
+        # post-LLM guardrails on streamed responses).
+        self.streaming_enabled = _resolve_streaming_enabled(self.w, LLM_MODEL_NAME)
 
         # LLM_MODEL_NAME is an AI Gateway endpoint, which is served on the OpenAI-compatible
         # AI Gateway path (NOT the Model Serving /serving-endpoints path). The ChatOpenAI client

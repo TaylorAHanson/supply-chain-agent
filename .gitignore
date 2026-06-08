@@ -49,3 +49,9 @@ ENV/
 # MLflow
 mlruns/
 mlflow.db
+
+# Local caches
+tools_skills_cache.db
+*.db-journal
+*.db-wal
+*.db-shm

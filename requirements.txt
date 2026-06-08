@@ -44,4 +44,6 @@ databricks-sdk==0.101.0
 pandas==2.3.3
 python-multipart>=0.0.9
 mlflow>=2.11.0
-databricks-langchain
+databricks-langchain==0.19.0
+unitycatalog-ai==0.3.2
+databricks-vectorsearch==0.67

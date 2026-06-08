@@ -8,6 +8,8 @@ echo "🚀 Starting EDH Agent local development environment..."
 export CATALOG_SCHEMA="${CATALOG_SCHEMA:-taylor_hanson_build_catalog.supply_chain_schema}"
 export SKILLS_VOLUME_PATH="${SKILLS_VOLUME_PATH:-/Volumes/taylor_hanson_build_catalog/supply_chain_schema/skills}"
 export DATABRICKS_WAREHOUSE_ID="${DATABRICKS_WAREHOUSE_ID:-238e4114cdfd555f}"
+# Streaming control: auto | true | false (auto = stream unless output guardrails are detected).
+export STREAMING_ENABLED="${STREAMING_ENABLED:-auto}"
 
 # Prompt for profile if not set in environment
 if [[ -z "${DATABRICKS_PROFILE}" ]]; then
