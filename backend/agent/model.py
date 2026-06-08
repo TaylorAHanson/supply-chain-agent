@@ -273,10 +273,11 @@ class EDHAgent(ResponsesAgent):
         # it, so they can't stream. Detect this and only stream when guardrails are absent.
         self.streaming_enabled = not _has_output_guardrails(self.w, LLM_MODEL_NAME)
 
-        # Databricks serving endpoints (foundation models, external models, and AI Gateway
-        # routes alike) are reached through the OpenAI-compatible /serving-endpoints path.
-        # Any AI Gateway guardrails configured on the endpoint are applied transparently here.
-        base_url = f"{host}/serving-endpoints"
+        # LLM_MODEL_NAME is an AI Gateway endpoint, which is served on the OpenAI-compatible
+        # AI Gateway path (NOT the Model Serving /serving-endpoints path). The ChatOpenAI client
+        # appends /chat/completions, matching the endpoint's "View starter code" URL:
+        #   {host}/ai-gateway/mlflow/v1/chat/completions  (model = the endpoint name)
+        base_url = f"{host}/ai-gateway/mlflow/v1"
         llm = ChatOpenAI(
             model=LLM_MODEL_NAME, # The serving endpoint name (e.g. the EDH agent serving endpoint)
             api_key=token,
