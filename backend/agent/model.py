@@ -275,14 +275,31 @@ class EDHAgent(ResponsesAgent):
         from langchain.agents import create_agent
         from backend.tools.registry import get_langchain_tools, discover_skills
         
-        # Initialize Databricks SDK
+        # Initialize Databricks SDK.
+        # Governance rule: in any DEPLOYED app we run strictly On-Behalf-Of (OBO) the signed-in
+        # user — never the app service principal — so Genie/SQL/UC all enforce the user's own
+        # permissions. The service-principal/profile path is allowed ONLY in local development.
         is_app = bool(os.environ.get("DATABRICKS_APP_NAME"))
         if user_token:
-            # Use On-Behalf-Of (OBO) authentication
+            # On-Behalf-Of (OBO): act as the signed-in user.
             self.w = WorkspaceClient(token=user_token, auth_type="pat")
         elif is_app:
-            self.w = WorkspaceClient()
+            # Deployed app but no forwarded user token. This means "user authorization" (OBO) is
+            # not enabled on the app (or the caller didn't forward X-Forwarded-Access-Token).
+            # Refuse to silently fall back to the service principal — that would run Genie/SQL as
+            # the app identity, bypassing per-user governance. Set ALLOW_SP_FALLBACK=true only as
+            # a deliberate, temporary escape hatch.
+            if os.getenv("ALLOW_SP_FALLBACK", "false").strip().lower() in ("true", "1", "yes", "on"):
+                print("[auth] WARNING: no OBO token; falling back to service principal (ALLOW_SP_FALLBACK).", flush=True)
+                self.w = WorkspaceClient()
+            else:
+                raise RuntimeError(
+                    "No OBO user token in a deployed app. Enable 'user authorization' (OBO) on the "
+                    "app and forward X-Forwarded-Access-Token so requests run as the user. Refusing "
+                    "to run Genie/SQL as the service principal. (Set ALLOW_SP_FALLBACK=true to override.)"
+                )
         else:
+            # Local development only.
             profile = os.getenv("DATABRICKS_PROFILE", "myenv")
             self.w = WorkspaceClient(profile=profile)
         

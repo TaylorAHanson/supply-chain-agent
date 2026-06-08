@@ -22,8 +22,11 @@ resources:
           group_name: edh_dbx_supplychain_owner
       source_code_path: .
       user_api_scopes:
-        - "model-serving"
         - "sql"
+        - "genie"
+        - "mcp.functions"
+        - "mcp.external"
+        - "model-serving"
         - "files"
         - "ai-gateway"
       resources:
