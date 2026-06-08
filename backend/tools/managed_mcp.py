@@ -19,6 +19,7 @@ Auth is via a bearer token (the caller passes the user's OBO token for governanc
 
 import hashlib
 import json
+import os
 import time
 
 import requests
@@ -49,9 +50,14 @@ _MAX_RETRIES = 2
 _RETRY_BACKOFF_S = 1.5
 
 # How long to block a single tool call while Genie / a long SQL statement finishes.
-_GENIE_MAX_WAIT_S = 360
+# Databricks Apps enforce a hard ~5-min (300s) total request timeout that NO amount of SSE
+# heartbeating can beat — if a single request runs longer, the platform kills it mid-flight
+# (the symptom: ~5-min hang, no error logged anywhere). So Genie's blocking wait must stay well
+# under 300s to leave budget for the LLM turn(s) that share the same request. Override via
+# GENIE_MAX_WAIT_S if your deployment has a different cap. 240s default = ~60s headroom.
+_GENIE_MAX_WAIT_S = int(os.getenv("GENIE_MAX_WAIT_S", "240"))
 _GENIE_POLL_INTERVAL_S = 4
-_SQL_MAX_WAIT_S = 120
+_SQL_MAX_WAIT_S = int(os.getenv("SQL_MAX_WAIT_S", "120"))
 _SQL_POLL_INTERVAL_S = 2
 
 

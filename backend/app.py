@@ -196,9 +196,42 @@ async def chat(request: ChatRequest, req_obj: Request):
                     loop.call_soon_threadsafe(event_queue.put_nowait, ("done", _PRODUCER_DONE))
 
             producer_future = loop.run_in_executor(None, _produce_events)
+            # Heartbeat: while the worker thread is blocked inside a long-running tool (e.g.
+            # ask_genie polling Genie for minutes) no events hit the queue, so the SSE response
+            # would send zero bytes and the client/proxy idle-times out (~5 min) with no error
+            # logged anywhere. Emit an SSE keep-alive comment if no event arrives within this
+            # window so the connection stays open until the agent actually produces output.
+            HEARTBEAT_S = 15
+            # During a silent stretch (e.g. a long ask_genie poll, or the whole turn when the
+            # endpoint runs in blocking mode) we emit ONE visible "working" reasoning note so the
+            # client's Thoughts panel shows progress, then fall back to invisible keep-alive
+            # comments. The note uses the existing `reasoning` event so it renders in clients that
+            # already handle it (native + command center) with no client changes. The flag resets
+            # whenever real output resumes, so each new silent stretch gets a fresh note.
+            idle_notified = False
             try:
                 while True:
-                    _kind, _payload = await event_queue.get()
+                    try:
+                        _kind, _payload = await asyncio.wait_for(
+                            event_queue.get(), timeout=HEARTBEAT_S
+                        )
+                    except asyncio.TimeoutError:
+                        if not idle_notified:
+                            idle_notified = True
+                            yield (
+                                "data: "
+                                + json.dumps({
+                                    "type": "reasoning",
+                                    "content": "\nWorking on it — querying data, this can take a minute…\n",
+                                })
+                                + "\n\n"
+                            )
+                        else:
+                            # SSE comment line: ignored by spec-compliant clients (never delivered
+                            # as a message), but keeps the TCP/HTTP connection from going idle.
+                            yield ": keep-alive\n\n"
+                        continue
+                    idle_notified = False  # real output resumed; re-arm the note for the next gap
                     if _kind == "done":
                         break
                     if _kind == "error":
