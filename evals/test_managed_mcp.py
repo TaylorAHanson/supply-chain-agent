@@ -174,9 +174,40 @@ def test_genie_poll_once_running_then_complete():
         ],
     })
     s1 = genie_poll_once(client, "c1", "r1", "")
-    assert s1["status"] == "running" and s1["answer"] == ""  # placeholder suppressed
+    assert s1["status"] == "running" and s1["answer"] == "" and s1["final"] == ""
     s2 = genie_poll_once(client, "c1", "r1", "")
-    assert s2["status"] == "complete" and "42 tables" in s2["answer"]
+    assert s2["status"] == "complete" and "42 tables" in s2["answer"] and s2["final"] == s2["answer"]
+
+
+def test_genie_poll_once_surfaces_progress_and_sql():
+    # While running with no final answer yet, narration (steps + SQL) is shown live, and `final`
+    # stays empty so the client doesn't settle on progress text.
+    client = _ScriptedClient({
+        "genie_poll_response": [{
+            "status": "in_progress",
+            "progress_steps": [{"text": "Identifying tables"}, {"text": "Running SQL"}],
+            "query_items": [{"query": "SELECT count(*) FROM demand"}],
+        }],
+    })
+    s = genie_poll_once(client, "c1", "r1", "")
+    assert s["status"] == "running"
+    assert s["final"] == ""
+    assert "Running SQL" in s["narration"]
+    assert "SELECT count(*) FROM demand" in s["narration"]
+    # answer falls back to the narration when there's no real partial answer yet.
+    assert s["answer"] == s["narration"]
+
+
+def test_render_genie_answer_includes_sql():
+    sc = {"final_answer": "42 rows", "query_items": [{
+        "query": "SELECT * FROM t",
+        "statement_response": {
+            "manifest": {"schema": {"columns": [{"name": "c"}]}},
+            "result": {"data_array": [{"values": [{"string_value": "9"}]}]},
+        },
+    }]}
+    out = _render_genie_answer(sc)
+    assert "42 rows" in out and "SELECT * FROM t" in out and "9" in out
 
 
 def test_genie_poll_once_failed():

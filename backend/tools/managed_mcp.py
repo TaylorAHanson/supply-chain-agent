@@ -20,6 +20,7 @@ Auth is via a bearer token (the caller passes the user's OBO token for governanc
 import hashlib
 import json
 import os
+import re
 import time
 
 import requests
@@ -29,8 +30,10 @@ _GENIE_SPACES_CACHE = {}
 _GENIE_SPACES_TTL_S = 300
 
 
-GENIE_TERMINAL_OK = {"COMPLETED"}
-GENIE_TERMINAL_BAD = {"FAILED", "CANCELLED", "CANCELED", "QUERY_RESULT_EXPIRED"}
+# Genie's terminal status spelling varies across the workspace-wide vs per-space MCP servers and
+# across releases, so match a few synonyms rather than just "COMPLETED".
+GENIE_TERMINAL_OK = {"COMPLETED", "COMPLETE", "SUCCEEDED", "SUCCESS", "DONE", "FINISHED"}
+GENIE_TERMINAL_BAD = {"FAILED", "CANCELLED", "CANCELED", "QUERY_RESULT_EXPIRED", "ERROR"}
 
 
 def _genie_status_ok(status) -> bool:
@@ -401,9 +404,12 @@ def genie_start(client: "ManagedMCPClient", question: str, space_id: str = "") -
 def genie_poll_once(client: "ManagedMCPClient", conversation_id: str, response_id: str, space_id: str = "") -> dict:
     """Run ONE Genie poll and return a normalized snapshot.
 
-    Returns ``{status: "running"|"complete"|"failed", answer, deep_link, error}``. ``answer`` is
-    the best-available text every poll (Genie re-sends the full answer as it forms), so the client
-    renders it by REPLACING the previous snapshot, never appending.
+    Returns ``{status, answer, final, narration, deep_link, error}``:
+      - ``answer``    — what to SHOW live this poll (the real partial answer if Genie has one,
+                        else the progress narration incl. the SQL it's running). REPLACE each poll.
+      - ``final``     — the real answer text ONLY (empty until Genie actually has it). The client
+                        uses this as the completion signal so it never settles on narration.
+      - ``narration`` — Genie's progress steps + SQL, rendered for the "thinking" view.
     """
     path, _ask_name, poll_name, per_space = _genie_paths(space_id)
     poll_args = (
@@ -415,15 +421,79 @@ def genie_poll_once(client: "ManagedMCPClient", conversation_id: str, response_i
     status = sc.get("status")
     if _genie_status_bad(status):
         return {"status": "failed", "error": f"Genie could not answer (status={status})."}
-    answer = _render_genie_answer(sc)
+
     deep_link = _find_genie_deep_link(sc)
-    if _genie_status_ok(status):
-        return {"status": "complete", "answer": answer, "deep_link": deep_link}
-    # Still running: surface whatever partial answer Genie has so far. Suppress the
-    # "no textual answer" placeholder so the UI shows a spinner, not a misleading message.
+    narration = _build_genie_progress(sc)
+    answer = _render_genie_answer(sc)
     if answer == "Genie completed but returned no textual answer.":
         answer = ""
-    return {"status": "running", "answer": answer, "deep_link": deep_link}
+
+    if _genie_status_ok(status):
+        return {"status": "complete", "answer": answer, "final": answer, "narration": narration, "deep_link": deep_link}
+    # Still running: show the real partial answer if present, otherwise the live narration/SQL.
+    return {
+        "status": "running",
+        "answer": answer or narration,
+        "final": answer,  # empty until the real answer lands → drives early completion
+        "narration": narration,
+        "deep_link": deep_link,
+    }
+
+
+# Genie embeds raw query-result tables between HTML comment markers; they're unreadable in a live
+# progress feed, so strip them out and just narrate the step.
+_GENIE_QUERY_BLOCK_RE = re.compile(r"<!--\s*begin:.*?-->.*?<!--\s*end:.*?-->", re.DOTALL)
+_GENIE_STEP_TEXT_KEYS = (
+    "content", "text", "description", "message", "markdown", "summary",
+    "detail", "title", "name", "label", "step",
+)
+
+
+def _genie_step_text(step) -> str:
+    """Best-effort pull of human-readable text from one Genie progress step."""
+    if isinstance(step, str):
+        return step.strip()
+    if not isinstance(step, dict):
+        return ""
+    for key in _GENIE_STEP_TEXT_KEYS:
+        val = step.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    longest = ""
+    for val in step.values():
+        if isinstance(val, str) and len(val.strip()) > len(longest):
+            longest = val.strip()
+    return longest
+
+
+def _clean_genie_step(text: str) -> str:
+    """Turn a raw progress step into a short readable one-liner (strip result tables, trim SQL)."""
+    text = _GENIE_QUERY_BLOCK_RE.sub("", text)
+    lines = [ln for ln in text.splitlines() if not ln.strip().startswith("|")]
+    cleaned = " ".join(" ".join(lines).split()).rstrip(": ").strip()
+    if len(cleaned) > 200:
+        cleaned = cleaned[:200].rstrip() + "…"
+    return cleaned
+
+
+def _build_genie_progress(sc: dict) -> str:
+    """Assemble a live "thinking" feed from Genie's progress steps + the SQL it's running.
+
+    Shows the most recent steps (rolling window) and any SQL statements as fenced code blocks so
+    the UI can render the same SQL + narration you see in the native Databricks Genie view.
+    """
+    parts = []
+    steps = sc.get("progress_steps")
+    if isinstance(steps, list):
+        lines = [t for s in steps if (t := _clean_genie_step(_genie_step_text(s)))]
+        if lines:
+            parts.append("\n".join(f"- {ln}" for ln in lines[-6:]))
+    for it in (sc.get("query_items") or []):
+        if isinstance(it, dict):
+            q = it.get("query") or it.get("statement")
+            if isinstance(q, str) and q.strip():
+                parts.append(f"```sql\n{q.strip()}\n```")
+    return "\n\n".join(parts).strip()
 
 
 def _find_genie_deep_link(sc: dict):
@@ -469,18 +539,23 @@ def _render_genie_answer(sc: dict) -> str:
 
 
 def _render_query_items(items) -> list:
-    """Best-effort render of workspace-wide ``query_items`` (SQL + results attachments)."""
+    """Best-effort render of workspace-wide ``query_items`` (SQL + results attachments).
+
+    Shows the SQL Genie ran (so the user sees the query, like the native Genie view) followed by
+    the result table.
+    """
     out = []
     for it in items or []:
         if isinstance(it, dict):
             desc = it.get("description") or it.get("title")
             if desc:
                 out.append(str(desc))
+            q = it.get("query") or it.get("statement")
+            if isinstance(q, str) and q.strip():
+                out.append(f"```sql\n{q.strip()}\n```")
             stmt = it.get("statement_response")
             if isinstance(stmt, dict):
                 out.append(_format_statement_result(stmt))
-            elif it.get("query"):
-                out.append(f"```sql\n{it['query']}\n```")
         elif it:
             out.append(str(it))
     return out
@@ -499,6 +574,9 @@ def _format_genie_answer(sc: dict) -> str:
         desc = qa.get("description")
         if desc:
             parts.append(desc)
+        q = qa.get("query") or qa.get("statement")
+        if isinstance(q, str) and q.strip():
+            parts.append(f"```sql\n{q.strip()}\n```")
         stmt = qa.get("statement_response")
         if isinstance(stmt, dict):
             parts.append(_format_statement_result(stmt))

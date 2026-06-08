@@ -174,7 +174,29 @@ function App() {
   // what makes long Genie answers reliable instead of leaving the UI stuck on the typing dots.
   const drainGeniePoll = async (handle: { conversation_id: string; response_id: string; space_id?: string; question?: string }) => {
     const startedAt = Date.now();
-    const TIMEOUT_MS = 270_000;
+    // Each poll is its own short request, so the TOTAL window is NOT bound by the platform's
+    // ~5-min per-request cap — only by how long the user is willing to wait. Keep it generous.
+    const TIMEOUT_MS = 900_000; // 15 min
+    // Genie's terminal status can lag well past when the answer is actually ready, so we also
+    // complete once a non-empty answer has stopped changing for several polls (~15s).
+    const STABLE_POLLS_TO_COMPLETE = 5;
+    let lastAnswer = '';
+    let stableCount = 0;
+
+    const finish = async (text: string, deepLink?: string) => {
+      const link = deepLink ? `\n\n[Open in Databricks Genie ↗](${deepLink})` : '';
+      const full = (text || '_Genie returned no answer._') + link;
+      updateLastMessage(m => { m.content = full; });
+      // Record the answer in the agent's server-side history so follow-ups have context.
+      try {
+        await fetch('/genie/resume', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId, answer: full }),
+        });
+      } catch { /* best-effort */ }
+    };
+
     while (Date.now() - startedAt < TIMEOUT_MS) {
       let res: any;
       try {
@@ -195,27 +217,30 @@ function App() {
       }
 
       if (res.status === 'complete') {
-        const answer = res.answer || '_Genie returned no answer._';
-        const link = res.deep_link ? `\n\n[Open in Databricks Genie ↗](${res.deep_link})` : '';
-        const full = answer + link;
-        updateLastMessage(m => { m.content = full; });
-        // Record the answer in the agent's server-side history so follow-ups have context.
-        try {
-          await fetch('/genie/resume', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session_id: sessionId, answer: full }),
-          });
-        } catch { /* best-effort */ }
+        await finish(res.answer, res.deep_link);
         return;
       }
       if (res.status === 'failed') {
         updateLastMessage(m => { m.content = `Genie could not answer: ${res.error || 'unknown error'}`; });
         return;
       }
-      // Still running: render Genie's partial answer live (REPLACE — it can change
-      // non-additively). Empty partial keeps the typing indicator.
-      if (res.answer) updateLastMessage(m => { m.content = res.answer; });
+      // Still running: show the live feed — the real partial answer if Genie has one, else the
+      // progress narration (steps + the SQL it's running). REPLACE each poll (non-additive).
+      const display: string = res.answer || '';
+      if (display) updateLastMessage(m => { m.content = display; });
+      // Early completion keys on the REAL answer only (res.final), never the narration, so we
+      // never settle the turn on progress text. Genie's COMPLETED status often lags the answer.
+      const finalAns: string = res.final || '';
+      if (finalAns && finalAns === lastAnswer) {
+        stableCount += 1;
+        if (stableCount >= STABLE_POLLS_TO_COMPLETE) {
+          await finish(finalAns, res.deep_link);
+          return;
+        }
+      } else {
+        lastAnswer = finalAns;
+        stableCount = 0;
+      }
       await new Promise(r => setTimeout(r, res.attempt_after_ms || 3000));
     }
     updateLastMessage(m => { m.content = 'Genie did not respond in time. Please try again or narrow the question.'; });
