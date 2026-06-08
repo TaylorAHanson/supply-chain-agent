@@ -11,12 +11,17 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import json
+
 import backend.tools.managed_mcp as mcp
 from backend.tools.managed_mcp import (
     ManagedMCPClient,
     ManagedMCPError,
     build_sql_tool,
     build_genie_tools,
+    genie_start,
+    genie_poll_once,
+    PENDING_POLL_PREFIX,
     _parse_jsonrpc_payload,
     _format_statement_result,
     _format_genie_answer,
@@ -127,12 +132,63 @@ def test_sql_tool_error_is_caught():
 
 # --- Genie tools -----------------------------------------------------------------------
 
-def _ask_tool(client):
-    return [t for t in build_genie_tools(client, w=None) if t.name == "ask_genie"][0]
+def _ask_tool(client, blocking=False):
+    return [t for t in build_genie_tools(client, w=None, blocking=blocking) if t.name == "ask_genie"][0]
 
 
-def test_genie_ask_workspace_wide_default():
-    # No space_id -> preferred workspace-wide genie_ask/genie_poll_response (status is lowercase).
+# --- Genie start-only (default streaming path) -----------------------------------------
+
+def test_genie_ask_start_only_returns_pending_poll():
+    # Default (streaming) path: ask_genie only STARTS Genie and hands back a poll handle.
+    client = _ScriptedClient({
+        "genie_ask": [{"conversation_id": "c1", "response_id": "r1", "status": "in_progress"}],
+    })
+    out = _ask_tool(client).invoke({"question": "how many tables?"})
+    assert out.startswith(PENDING_POLL_PREFIX)
+    handle = json.loads(out[len(PENDING_POLL_PREFIX):])
+    assert handle == {
+        "kind": "genie",
+        "conversation_id": "c1",
+        "response_id": "r1",
+        "space_id": "",
+        "question": "how many tables?",
+    }
+    # Exactly one call: the start. No inline polling.
+    assert client.calls == [("genie_ask", {"question": "how many tables?"})]
+
+
+def test_genie_start_extracts_handle_variants():
+    client = _ScriptedClient({
+        "query_space_SP": [{"conversationId": "c1", "messageId": "m1", "status": "ASKING_AI"}],
+    })
+    handle = genie_start(client, "q", "SP")
+    assert handle["conversation_id"] == "c1" and handle["response_id"] == "m1"
+    assert client.calls[0] == ("query_space_SP", {"query": "q"})
+
+
+def test_genie_poll_once_running_then_complete():
+    client = _ScriptedClient({
+        "genie_poll_response": [
+            {"status": "in_progress"},
+            {"status": "completed", "final_answer": "There are 42 tables."},
+        ],
+    })
+    s1 = genie_poll_once(client, "c1", "r1", "")
+    assert s1["status"] == "running" and s1["answer"] == ""  # placeholder suppressed
+    s2 = genie_poll_once(client, "c1", "r1", "")
+    assert s2["status"] == "complete" and "42 tables" in s2["answer"]
+
+
+def test_genie_poll_once_failed():
+    client = _ScriptedClient({"genie_poll_response": [{"status": "failed"}]})
+    s = genie_poll_once(client, "c1", "r1", "")
+    assert s["status"] == "failed" and "could not answer" in s["error"].lower()
+
+
+# --- Genie blocking path (non-streaming / output-guardrails) ---------------------------
+
+def test_genie_ask_blocking_workspace_wide():
+    # blocking=True -> inline poll to completion (status is lowercase).
     client = _ScriptedClient({
         "genie_ask": [{"conversation_id": "c1", "response_id": "r1", "status": "in_progress"}],
         "genie_poll_response": [
@@ -140,13 +196,13 @@ def test_genie_ask_workspace_wide_default():
             {"status": "completed", "final_answer": "There are 42 tables."},
         ],
     })
-    out = _ask_tool(client).invoke({"question": "how many tables?"})
+    out = _ask_tool(client, blocking=True).invoke({"question": "how many tables?"})
     assert "42 tables" in out
     assert client.calls[0][0] == "genie_ask"
     assert client.calls.count(("genie_poll_response", {"conversation_id": "c1", "response_id": "r1"})) == 2
 
 
-def test_genie_ask_targeted_space():
+def test_genie_ask_blocking_targeted_space():
     # space_id provided -> per-space query_space_/poll_response_ path.
     client = _ScriptedClient({
         "query_space_SP": [{"conversationId": "c1", "messageId": "m1", "status": "ASKING_AI"}],
@@ -155,17 +211,17 @@ def test_genie_ask_targeted_space():
             {"status": "COMPLETED", "content": {"textAttachments": ["The answer is 10."], "queryAttachments": []}},
         ],
     })
-    out = _ask_tool(client).invoke({"question": "how many?", "space_id": "SP"})
+    out = _ask_tool(client, blocking=True).invoke({"question": "how many?", "space_id": "SP"})
     assert "The answer is 10." in out
     assert client.calls[0][0] == "query_space_SP"
     assert client.calls.count(("poll_response_SP", {"conversation_id": "c1", "message_id": "m1"})) == 2
 
 
-def test_genie_ask_terminal_failure():
+def test_genie_ask_blocking_terminal_failure():
     client = _ScriptedClient({
         "genie_ask": [{"conversation_id": "c", "response_id": "r", "status": "failed"}],
     })
-    out = _ask_tool(client).invoke({"question": "q"})
+    out = _ask_tool(client, blocking=True).invoke({"question": "q"})
     assert "could not answer" in out.lower()
 
 

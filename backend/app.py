@@ -64,6 +64,16 @@ class UserSkillRequest(BaseModel):
     name: str
     content: str = ""
 
+class GeniePollRequest(BaseModel):
+    conversation_id: str
+    response_id: str
+    space_id: str = ""
+    question: str = None
+
+class GenieResumeRequest(BaseModel):
+    session_id: str
+    answer: str
+
 
 def _extract_user_token(req_obj: Request):
     """Pull the OBO access token out of the inbound request headers, if present."""
@@ -83,6 +93,37 @@ def _workspace_client_for(req_obj: Request):
     if token:
         return WorkspaceClient(host=os.getenv("DATABRICKS_HOST"), token=token, auth_type="pat")
     return shared_w
+
+
+def _managed_mcp_client_for(req_obj: Request):
+    """Build a Genie/SQL managed-MCP client for the calling user (OBO).
+
+    Governance parity with the agent: in a DEPLOYED app we run strictly On-Behalf-Of the
+    signed-in user and refuse to fall back to the service principal (set ALLOW_SP_FALLBACK=true
+    to override). Locally we use the dev profile's resolved credentials.
+    """
+    from backend.tools.managed_mcp import ManagedMCPClient
+
+    token = _extract_user_token(req_obj)
+    if token:
+        host = os.getenv("DATABRICKS_HOST") or shared_w.config.host
+    elif IS_DATABRICKS_APP and os.getenv("ALLOW_SP_FALLBACK", "false").strip().lower() not in ("true", "1", "yes", "on"):
+        raise HTTPException(
+            status_code=401,
+            detail="No OBO user token. Enable 'user authorization' (OBO) on the app so Genie runs as the user.",
+        )
+    else:
+        headers = shared_w.config.authenticate()
+        if isinstance(headers, dict) and "Authorization" in headers:
+            token = headers["Authorization"].replace("Bearer ", "")
+        else:
+            token = shared_w.config.token
+        host = shared_w.config.host
+
+    host = (host or "").rstrip("/")
+    if host and not host.startswith("http"):
+        host = f"https://{host}"
+    return ManagedMCPClient(host=host, token=token)
 
 # In-memory store for conversational history
 session_history = {}
@@ -178,6 +219,10 @@ async def chat(request: ChatRequest, req_obj: Request):
         async def event_generator():
             nonlocal tool_calls_executed
             output_msg = ""
+            # Set when the agent halts on an async tool (ask_genie) and hands the client a poll
+            # handle. In that case the answer arrives out of band via /genie/poll, so we must NOT
+            # persist an (empty) assistant turn here — /genie/resume records the real answer.
+            pending_poll_emitted = False
             # The agent's predict_stream is a *blocking* generator (tools like ask_genie can
             # poll Genie for minutes). Run it on a worker thread and hand events back to the
             # event loop through a queue, so other requests aren't stalled. Keeping the whole
@@ -249,6 +294,16 @@ async def chat(request: ChatRequest, req_obj: Request):
                         reasoning_chunk = getattr(stream_event, "delta", "") if not isinstance(stream_event, dict) else stream_event.get("delta", "")
                         if reasoning_chunk:
                             yield f"data: {json.dumps({'type': 'reasoning', 'content': reasoning_chunk})}\n\n"
+                    elif event_type in ["response.pending_poll", "pending_poll"]:
+                        # The agent started an async tool (Genie) and halted. Forward the poll
+                        # handle so the client can drain the answer over short poll requests.
+                        raw = getattr(stream_event, "delta", "") if not isinstance(stream_event, dict) else stream_event.get("delta", "")
+                        try:
+                            handle = json.loads(raw) if raw else {}
+                        except Exception:
+                            handle = {}
+                        pending_poll_emitted = True
+                        yield f"data: {json.dumps({'type': 'pending_poll', **handle})}\n\n"
                     elif event_type in ["response.reasoning_reclassify", "reasoning_reclassify"]:
                         moved = getattr(stream_event, "delta", "") if not isinstance(stream_event, dict) else stream_event.get("delta", "")
                         if moved:
@@ -295,7 +350,10 @@ async def chat(request: ChatRequest, req_obj: Request):
                     print(f"DEBUG: Error getting trace ID: {e}")
                     pass
                 
-                session_history[request.session_id].append({"role": "assistant", "content": output_msg})
+                # Skip persisting an empty assistant turn when the agent halted on an async tool;
+                # /genie/resume records the real answer once the client finishes polling.
+                if not pending_poll_emitted:
+                    session_history[request.session_id].append({"role": "assistant", "content": output_msg})
                 yield f"data: {json.dumps({'type': 'trace_id', 'content': trace_id})}\n\n"
                 yield "data: [DONE]\n\n"
                 
@@ -308,6 +366,46 @@ async def chat(request: ChatRequest, req_obj: Request):
         if "not ready" in error_msg.lower() or "not_ready" in error_msg.lower() or "503" in error_msg:
             return ChatResponse(message="⏳ The Databricks Agent endpoint is still provisioning. This usually takes 5-10 minutes. Please try again shortly!")
         raise HTTPException(status_code=500, detail=f"Error querying agent endpoint: {error_msg}")
+
+# ---------------------------------------------------------------------------
+# Async Genie polling. The agent's ask_genie tool only *starts* a Genie turn and
+# halts; the client then drains the answer here over short poll requests so no single
+# request is ever held open past the Databricks Apps ~5-min cap.
+# ---------------------------------------------------------------------------
+@app.post("/genie/poll")
+async def genie_poll_endpoint(request: GeniePollRequest, req_obj: Request):
+    """Run ONE Genie poll under the caller's OBO identity and return a snapshot."""
+    from backend.tools.managed_mcp import genie_poll_once, ManagedMCPError
+    try:
+        client = _managed_mcp_client_for(req_obj)
+        return genie_poll_once(
+            client,
+            request.conversation_id,
+            request.response_id,
+            request.space_id or "",
+        )
+    except HTTPException:
+        raise
+    except ManagedMCPError as e:
+        return {"status": "failed", "error": f"Genie poll error: {e}"}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"status": "failed", "error": f"Genie poll failed: {e}"}
+
+
+@app.post("/genie/resume")
+async def genie_resume_endpoint(request: GenieResumeRequest):
+    """Persist a completed Genie answer to the session history.
+
+    The async-Genie turn halts before producing an assistant message, so once the client has
+    drained the answer it records it here. This keeps server-side conversation history in sync
+    so follow-up turns see what Genie said.
+    """
+    hist = session_history.setdefault(request.session_id, [])
+    hist.append({"role": "assistant", "content": request.answer})
+    return {"status": "ok"}
+
 
 # Tools that the agent always binds regardless of UC discovery or user selection. These don't
 # come from system.information_schema, so we inject them into the discovery response so the UI

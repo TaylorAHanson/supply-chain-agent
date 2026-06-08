@@ -61,6 +61,20 @@ _SQL_MAX_WAIT_S = int(os.getenv("SQL_MAX_WAIT_S", "120"))
 _SQL_POLL_INTERVAL_S = 2
 
 
+# Sentinel that ``ask_genie`` returns instead of a blocking answer. The agent loop
+# (model.py) recognizes a ToolMessage whose content starts with this prefix, emits a
+# ``pending_poll`` event, and halts the turn so the CLIENT drains Genie via short poll
+# requests — never holding one request open past the Databricks Apps ~5-min cap. The JSON
+# after the prefix carries the Genie handle (conversation_id / response_id / space_id).
+PENDING_POLL_PREFIX = "__GENIE_PENDING_POLL__:"
+
+# Field names Genie may use to ship a deep link back to the conversation in Databricks One.
+_GENIE_URL_FIELDS = (
+    "conversation_url", "share_url", "share_link", "deep_link",
+    "deeplink", "permalink", "link", "url",
+)
+
+
 class ManagedMCPError(Exception):
     pass
 
@@ -228,11 +242,16 @@ def build_sql_tool(client: "ManagedMCPClient"):
     return query_lakehouse
 
 
-def build_genie_tools(client: "ManagedMCPClient", w=None):
+def build_genie_tools(client: "ManagedMCPClient", w=None, blocking: bool = False):
     """Return ``[list_genies, ask_genie]`` backed by the Genie managed MCP server.
 
-    ``list_genies`` uses the (OBO) WorkspaceClient to enumerate spaces the caller can see;
-    ``ask_genie`` initiates a turn on a space and blocks (polling) until it completes.
+    ``list_genies`` uses the (OBO) WorkspaceClient to enumerate spaces the caller can see.
+
+    ``ask_genie`` defaults to *start-only*: it kicks off the Genie turn and hands a poll handle
+    back via a sentinel so the client drains the answer over short requests (no long-held
+    request → no Apps ~5-min timeout). Set ``blocking=True`` for the non-streaming path (output
+    guardrails), where the agent runs ``agent.invoke`` atomically and can't hand off mid-turn —
+    there ``ask_genie`` polls to completion inline like before.
     """
     from langchain_core.tools import tool
 
@@ -277,75 +296,162 @@ def build_genie_tools(client: "ManagedMCPClient", w=None):
         By DEFAULT Genie searches across **all** of your accessible Genie spaces / enterprise data
         and writes the SQL itself — you do NOT need to choose a space. This is the preferred way to
         ask analytical questions. Optionally pass a `space_id` (from `list_genies`) to restrict the
-        question to one specific space. Blocks until Genie finishes (typically 1-5 minutes).
+        question to one specific space.
+
+        This returns immediately with a pending handle; the answer streams in to the user
+        afterwards. Do NOT call it again for the same question — the result is delivered out of band.
         """
         if not question:
             return "Error: question is required."
 
-        if space_id:
-            # Target a single space (per-space MCP server).
-            path = f"/api/2.0/mcp/genie/{space_id}"
-            ask_name = f"query_space_{space_id}"
-            poll_name = f"poll_response_{space_id}"
-            ask_args = {"query": question}
-        else:
-            # Workspace-wide Genie: searches across spaces and grounds its own answer.
-            path = "/api/2.0/mcp/genie"
-            ask_name = "genie_ask"
-            poll_name = "genie_poll_response"
-            ask_args = {"question": question}
-
         mode = f"space={space_id}" if space_id else "workspace-wide"
-        print(f"[ask_genie] start ({mode}) q={question[:80]!r}", flush=True)
+        print(f"[ask_genie] start ({mode}) q={question[:80]!r} blocking={blocking}", flush=True)
         try:
-            sc = client.call_tool(path, ask_name, ask_args, timeout=120)
+            handle = genie_start(client, question, space_id)
         except ManagedMCPError as e:
             print(f"[ask_genie] ask FAILED: {e}", flush=True)
             return f"Error asking Genie: {e}"
 
-        conv_id = sc.get("conversation_id") or sc.get("conversationId")
-        resp_id = (
-            sc.get("response_id") or sc.get("responseId")
-            or sc.get("message_id") or sc.get("messageId")
-        )
-        status = sc.get("status")
+        conv_id, resp_id = handle.get("conversation_id"), handle.get("response_id")
+        if not conv_id or not resp_id:
+            print(f"[ask_genie] no conversation/response id returned (keys may differ)", flush=True)
+            return "Genie did not return a conversation/response id to poll."
+
+        if blocking:
+            # Non-streaming path: poll inline to completion (the agent invoke is atomic here).
+            if _genie_status_bad(handle.get("status")):
+                print(f"[ask_genie] terminal BAD at start status={handle.get('status')!r}", flush=True)
+                return f"Genie could not answer (status={handle.get('status')})."
+            waited = 0
+            while waited < _GENIE_MAX_WAIT_S:
+                time.sleep(_GENIE_POLL_INTERVAL_S)
+                waited += _GENIE_POLL_INTERVAL_S
+                try:
+                    snap = genie_poll_once(client, conv_id, resp_id, space_id)
+                except ManagedMCPError as e:
+                    print(f"[ask_genie] poll FAILED at {waited}s: {e}", flush=True)
+                    return f"Error polling Genie: {e}"
+                print(f"[ask_genie] poll {waited}s: status={snap['status']!r}", flush=True)
+                if snap["status"] == "complete":
+                    return snap.get("answer") or "Genie completed but returned no textual answer."
+                if snap["status"] == "failed":
+                    return snap.get("error") or "Genie could not answer."
+            print(f"[ask_genie] TIMEOUT after {waited}s", flush=True)
+            return f"Genie is still processing after {_GENIE_MAX_WAIT_S}s. Try again or narrow the question."
+
         print(
-            f"[ask_genie] asked: status={status!r} conv_id={conv_id!r} resp_id={resp_id!r} "
-            f"keys={list(sc.keys())}",
+            f"[ask_genie] started: conv_id={conv_id!r} resp_id={resp_id!r} "
+            f"(pending poll handed to client)",
             flush=True,
         )
-
-        waited = 0
-        while not _genie_terminal(status):
-            if not conv_id or not resp_id:
-                print("[ask_genie] no conversation/response id to poll; aborting", flush=True)
-                return "Genie did not return a conversation/response id to poll."
-            if waited >= _GENIE_MAX_WAIT_S:
-                print(f"[ask_genie] TIMEOUT after {waited}s (status={status!r})", flush=True)
-                return f"Genie is still processing after {_GENIE_MAX_WAIT_S}s. Try again or narrow the question."
-            time.sleep(_GENIE_POLL_INTERVAL_S)
-            waited += _GENIE_POLL_INTERVAL_S
-            # Per-space polls key on message_id; workspace-wide polls key on response_id.
-            poll_args = (
-                {"conversation_id": conv_id, "message_id": resp_id}
-                if space_id else
-                {"conversation_id": conv_id, "response_id": resp_id}
-            )
-            try:
-                sc = client.call_tool(path, poll_name, poll_args, timeout=60)
-            except ManagedMCPError as e:
-                print(f"[ask_genie] poll FAILED at {waited}s: {e}", flush=True)
-                return f"Error polling Genie: {e}"
-            status = sc.get("status")
-            print(f"[ask_genie] poll {waited}s: status={status!r}", flush=True)
-
-        if _genie_status_bad(status):
-            print(f"[ask_genie] terminal BAD status={status!r}", flush=True)
-            return f"Genie could not answer (status={status})."
-        print(f"[ask_genie] COMPLETED in ~{waited}s", flush=True)
-        return _render_genie_answer(sc)
+        # Start-only: hand the poll handle back to the agent loop via a sentinel string. The
+        # loop (model.py) recognizes the prefix, emits a pending_poll event, and stops the turn.
+        return PENDING_POLL_PREFIX + json.dumps({
+            "kind": "genie",
+            "conversation_id": conv_id,
+            "response_id": resp_id,
+            "space_id": space_id or "",
+            "question": question,
+        })
 
     return [list_genies, ask_genie]
+
+
+# --------------------------------------------------------------------------------------
+# Genie async primitives (start / poll) shared by the ask_genie tool and the /genie/poll
+# HTTP endpoint. Splitting "start" from "poll" lets the agent return immediately while the
+# client drains the answer over many short requests (no single long-held request).
+# --------------------------------------------------------------------------------------
+
+def _genie_paths(space_id: str):
+    """Return ``(path, ask_name, poll_name, per_space)`` for a (possibly empty) space_id."""
+    if space_id:
+        return (
+            f"/api/2.0/mcp/genie/{space_id}",
+            f"query_space_{space_id}",
+            f"poll_response_{space_id}",
+            True,
+        )
+    return ("/api/2.0/mcp/genie", "genie_ask", "genie_poll_response", False)
+
+
+def genie_start(client: "ManagedMCPClient", question: str, space_id: str = "") -> dict:
+    """Kick off a Genie turn and return its poll handle (no waiting).
+
+    Returns ``{conversation_id, response_id, status, space_id, question}``. Raises
+    ``ManagedMCPError`` if the start call itself fails.
+    """
+    path, ask_name, _poll_name, per_space = _genie_paths(space_id)
+    ask_args = {"query": question} if per_space else {"question": question}
+    sc = client.call_tool(path, ask_name, ask_args, timeout=120)
+    conv_id = sc.get("conversation_id") or sc.get("conversationId")
+    resp_id = (
+        sc.get("response_id") or sc.get("responseId")
+        or sc.get("message_id") or sc.get("messageId")
+    )
+    return {
+        "conversation_id": conv_id,
+        "response_id": resp_id,
+        "status": sc.get("status"),
+        "space_id": space_id or "",
+        "question": question,
+    }
+
+
+def genie_poll_once(client: "ManagedMCPClient", conversation_id: str, response_id: str, space_id: str = "") -> dict:
+    """Run ONE Genie poll and return a normalized snapshot.
+
+    Returns ``{status: "running"|"complete"|"failed", answer, deep_link, error}``. ``answer`` is
+    the best-available text every poll (Genie re-sends the full answer as it forms), so the client
+    renders it by REPLACING the previous snapshot, never appending.
+    """
+    path, _ask_name, poll_name, per_space = _genie_paths(space_id)
+    poll_args = (
+        {"conversation_id": conversation_id, "message_id": response_id}
+        if per_space else
+        {"conversation_id": conversation_id, "response_id": response_id}
+    )
+    sc = client.call_tool(path, poll_name, poll_args, timeout=60)
+    status = sc.get("status")
+    if _genie_status_bad(status):
+        return {"status": "failed", "error": f"Genie could not answer (status={status})."}
+    answer = _render_genie_answer(sc)
+    deep_link = _find_genie_deep_link(sc)
+    if _genie_status_ok(status):
+        return {"status": "complete", "answer": answer, "deep_link": deep_link}
+    # Still running: surface whatever partial answer Genie has so far. Suppress the
+    # "no textual answer" placeholder so the UI shows a spinner, not a misleading message.
+    if answer == "Genie completed but returned no textual answer.":
+        answer = ""
+    return {"status": "running", "answer": answer, "deep_link": deep_link}
+
+
+def _find_genie_deep_link(sc: dict):
+    """Best-effort scan for a Databricks-hosted conversation URL in a Genie response."""
+    def _ok(v):
+        if not isinstance(v, str):
+            return None
+        v = v.strip()
+        if v.startswith(("http://", "https://")) and "databricks." in v:
+            return v
+        return None
+
+    candidates = [sc.get(k) for k in _GENIE_URL_FIELDS]
+    for nest in ("content", "result", "data"):
+        nested = sc.get(nest)
+        if isinstance(nested, dict):
+            candidates.extend(nested.get(k) for k in _GENIE_URL_FIELDS)
+    for items_key in ("query_items", "attachments"):
+        items = sc.get(items_key)
+        if isinstance(items, list):
+            for it in items:
+                if isinstance(it, dict):
+                    candidates.extend(it.get(k) for k in _GENIE_URL_FIELDS)
+    for c in candidates:
+        url = _ok(c)
+        if url:
+            return url
+    return None
 
 
 def _render_genie_answer(sc: dict) -> str:

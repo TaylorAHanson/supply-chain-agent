@@ -133,8 +133,12 @@ def _mcp_host_and_token(w, user_token):
     return host, token
 
 
-def _load_managed_mcp_tools(w, user_token):
+def _load_managed_mcp_tools(w, user_token, genie_blocking=False):
     """Build the SQL + Genie tools backed by Databricks managed MCP servers.
+
+    ``genie_blocking`` is forwarded to ``build_genie_tools``: in the non-streaming (output
+    guardrails) path Genie must poll inline since the agent invoke is atomic; in the streaming
+    path it's start-only so the client drains the answer (no long-held request).
 
     Returns an empty list (and logs) on any failure so the agent still comes up with its
     remaining tools rather than crashing.
@@ -153,7 +157,7 @@ def _load_managed_mcp_tools(w, user_token):
 
         client = ManagedMCPClient(host=host, token=token)
         tools = [build_sql_tool(client)]
-        tools.extend(build_genie_tools(client, w=w))
+        tools.extend(build_genie_tools(client, w=w, blocking=genie_blocking))
         return tools
     except Exception as e:
         print(f"Warning: Failed to load managed MCP tools: {e}")
@@ -252,9 +256,12 @@ def _load_local_mcp_tools(only=None, selected_tools=None):
     return loaded
 
 
-def get_langchain_tools(w=None, selected_tools=None, user_token=None):
+def get_langchain_tools(w=None, selected_tools=None, user_token=None, genie_blocking=False):
     """
     Discovers all tools dynamically and wraps them as LangChain tools.
+
+    ``genie_blocking`` (set on the non-streaming guardrails path) makes ask_genie poll inline
+    instead of handing a pending-poll handle to the client.
     """
     import os
     
@@ -271,7 +278,7 @@ def get_langchain_tools(w=None, selected_tools=None, user_token=None):
     # Bind the Databricks managed-MCP tools first (SQL + Genie). These replace the old
     # hand-rolled query_lakehouse/ask_genie and run under the user's OBO token. Binding them
     # first means name de-dup below skips any UC/local functions that share these names.
-    langchain_tools.extend(_load_managed_mcp_tools(w, user_token))
+    langchain_tools.extend(_load_managed_mcp_tools(w, user_token, genie_blocking=genie_blocking))
 
     # Bind an OBO-aware read_skill that can also see the user's personal workspace skills.
     # Built first so name de-dup keeps it over the app-SP local fallback below.

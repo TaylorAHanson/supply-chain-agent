@@ -362,9 +362,15 @@ class EDHAgent(ResponsesAgent):
                 f"{str(user_prompt).strip()}\n"
             )
 
-        # Get Tools
+        # Get Tools. When streaming is OFF (output guardrails → atomic agent.invoke) Genie can't
+        # hand a pending-poll back to the client mid-turn, so it must poll inline (blocking).
         _t = time.monotonic()
-        tools = get_langchain_tools(w=self.w, selected_tools=selected_tools, user_token=user_token)
+        tools = get_langchain_tools(
+            w=self.w,
+            selected_tools=selected_tools,
+            user_token=user_token,
+            genie_blocking=not self.streaming_enabled,
+        )
         print(
             f"[timing] get_langchain_tools: {time.monotonic() - _t:.1f}s "
             f"({len(tools)} tools, {_auth_mode})",
@@ -446,8 +452,10 @@ class EDHAgent(ResponsesAgent):
         Streams the final answer as text deltas, and surfaces the agent's intermediate
         steps (extended-thinking content + tool calls) as reasoning deltas.
         """
+        import json
         import time
         from langchain_core.messages import AIMessageChunk, ToolMessage
+        from backend.tools.managed_mcp import PENDING_POLL_PREFIX
 
         _t_run = time.monotonic()
         _tool_started_at = {}  # tool name -> monotonic start (for per-tool wall time)
@@ -507,6 +515,28 @@ class EDHAgent(ResponsesAgent):
                 if event is not None:
                     yield event
                 _tname = getattr(chunk, "name", None)
+
+                # Async tool (ask_genie): the tool only *started* the work and handed back a
+                # poll handle via a sentinel. Emit a pending_poll event and stop the turn so the
+                # CLIENT drains the answer over short poll requests — never holding this request
+                # open past the Databricks Apps ~5-min cap.
+                _content = getattr(chunk, "content", "")
+                if isinstance(_content, str) and _content.startswith(PENDING_POLL_PREFIX):
+                    event = announce_tool(_tname)
+                    if event is not None:
+                        yield event
+                    try:
+                        _handle = json.loads(_content[len(PENDING_POLL_PREFIX):])
+                    except Exception:
+                        _handle = {}
+                    print(f"[ask_genie] emitting pending_poll, halting turn ({_handle.get('kind')})", flush=True)
+                    yield ResponsesAgentStreamEvent(
+                        type="response.pending_poll",
+                        delta=json.dumps(_handle),
+                        item_id=reasoning_item_id,
+                    )
+                    return
+
                 event = announce_tool(_tname)
                 if event is not None:
                     yield event
