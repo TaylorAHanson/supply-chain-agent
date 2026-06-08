@@ -368,8 +368,11 @@ def get_langchain_tools(w=None, selected_tools=None, user_token=None):
             func_names = [f for f in func_names if f in selected_tools]
             
         if not func_names:
-            # No UC tools selected or discovered, don't try to initialize the toolkit to avoid warnings
-            return []
+            # No UC functions selected or discovered: skip UCFunctionToolkit init (avoids noisy
+            # warnings), but DON'T drop the tools already bound above (managed-MCP ask_genie /
+            # query_lakehouse / list_genies + read_skill). Returning [] here was a bug that left
+            # the agent with no tools whenever UC discovery failed (e.g. OBO scope / warehouse).
+            return langchain_tools
             
         # Build a UC function client bound to OUR WorkspaceClient (OBO user token, or the app
         # service principal). Passing client=w is critical: without it the toolkit falls back to
