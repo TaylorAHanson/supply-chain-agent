@@ -158,7 +158,71 @@ function App() {
     }
   };
 
+  // Mutate just the trailing assistant message (the in-flight turn).
+  const updateLastMessage = (mutate: (m: Message) => void) => setMessages(prev => {
+    const next = [...prev];
+    const i = next.length - 1;
+    if (next[i]?.role !== 'assistant') return prev;
+    const last = { ...next[i] };
+    mutate(last);
+    next[i] = last;
+    return next;
+  });
+
+  // Drains an async Genie turn after the agent halted with a pending_poll handle. Each poll is
+  // a short request, so no single request is held open past the platform's ~5-min cap — this is
+  // what makes long Genie answers reliable instead of leaving the UI stuck on the typing dots.
+  const drainGeniePoll = async (handle: { conversation_id: string; response_id: string; space_id?: string; question?: string }) => {
+    const startedAt = Date.now();
+    const TIMEOUT_MS = 270_000;
+    while (Date.now() - startedAt < TIMEOUT_MS) {
+      let res: any;
+      try {
+        const r = await fetch('/genie/poll', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            conversation_id: handle.conversation_id,
+            response_id: handle.response_id,
+            space_id: handle.space_id || '',
+            question: handle.question || '',
+          }),
+        });
+        res = await r.json();
+      } catch {
+        updateLastMessage(m => { m.content = 'Sorry, I lost the connection while waiting on Genie.'; });
+        return;
+      }
+
+      if (res.status === 'complete') {
+        const answer = res.answer || '_Genie returned no answer._';
+        const link = res.deep_link ? `\n\n[Open in Databricks Genie ↗](${res.deep_link})` : '';
+        const full = answer + link;
+        updateLastMessage(m => { m.content = full; });
+        // Record the answer in the agent's server-side history so follow-ups have context.
+        try {
+          await fetch('/genie/resume', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: sessionId, answer: full }),
+          });
+        } catch { /* best-effort */ }
+        return;
+      }
+      if (res.status === 'failed') {
+        updateLastMessage(m => { m.content = `Genie could not answer: ${res.error || 'unknown error'}`; });
+        return;
+      }
+      // Still running: render Genie's partial answer live (REPLACE — it can change
+      // non-additively). Empty partial keeps the typing indicator.
+      if (res.answer) updateLastMessage(m => { m.content = res.answer; });
+      await new Promise(r => setTimeout(r, res.attempt_after_ms || 3000));
+    }
+    updateLastMessage(m => { m.content = 'Genie did not respond in time. Please try again or narrow the question.'; });
+  };
+
   const sendQueryAndStream = async (query: string) => {
+    let pendingPoll: { conversation_id: string; response_id: string; space_id?: string; question?: string } | null = null;
     try {
       const response = await fetch('/chat', {
         method: 'POST',
@@ -199,7 +263,11 @@ function App() {
                 
                 try {
                   const data = JSON.parse(dataStr);
-                  if (data.type === 'chunk') {
+                  if (data.type === 'pending_poll') {
+                    // The agent started Genie and halted; remember the handle and drive the
+                    // poll loop once this (short) stream closes.
+                    pendingPoll = data;
+                  } else if (data.type === 'chunk') {
                     setMessages(prev => {
                       const newMessages = [...prev];
                       const lastMessageIndex = newMessages.length - 1;
@@ -278,6 +346,12 @@ function App() {
                 }
               }
             }
+          }
+
+          // The agent halted on an async Genie call: drain it via short poll requests so the
+          // answer streams in reliably instead of leaving the UI stuck on the typing dots.
+          if (pendingPoll) {
+            await drainGeniePoll(pendingPoll);
           }
         }
       } else {
